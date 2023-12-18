@@ -1,0 +1,5 @@
+#File non più modificabili
+.venv/*
+__pycache__/*
+settings.py
+dbz.db
