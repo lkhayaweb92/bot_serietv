@@ -20,7 +20,21 @@ PROMOZIONI = {
         "periodo_fine":         "20240214",
         "COSTO_PREMIUM":        125,
         "COSTO_MANTENIMENTO":   25
-    },    
+    },
+        "Pasqua": {
+        "nome":                 "Pasqua",
+        "periodo_inizio":       "20240331",
+        "periodo_fine":         "20240331",
+        "COSTO_PREMIUM":        125,
+        "COSTO_MANTENIMENTO":   25
+    },
+        "Carnevale": {
+        "nome":                 "Carnevale",
+        "periodo_inizio":       "20240208",
+        "periodo_fine":         "20240213",
+        "COSTO_PREMIUM":        100,
+        "COSTO_MANTENIMENTO":   25
+    },
 }
 
 CANALE_LOG          =    '-1001804087701'
