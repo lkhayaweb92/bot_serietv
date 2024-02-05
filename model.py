@@ -22,7 +22,7 @@ livelli = [0, 100, 235, 505, 810, 1250, 1725, 2335, 2980, 3760, 4575, 5525, 6510
 
 class Database:
     def __init__(self):
-        engine = create_engine('sqlite:///points.db')
+        engine = create_engine('sqlite:///dbz.db')
         create_table(engine)
         self.Session = sessionmaker(bind=engine)
 
