@@ -9,7 +9,7 @@ bot = TeleBot(BOT_TOKEN, threaded=False)
 import Points
 
 def backup():
-    doc = open('points.db', 'rb')
+    doc = open('dbz.db', 'rb')
     bot.send_document(CANALE_LOG, doc, caption="aROMa #database #backup")
     doc.close()
 
