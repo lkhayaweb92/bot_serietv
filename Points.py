@@ -12,7 +12,7 @@ import random
 
 class Points:    
     def __init__(self):
-        engine = create_engine('sqlite:///points.db')
+        engine = create_engine('sqlite:///dbz.db')
         create_table(engine)
         self.Session = sessionmaker(bind=engine)
 
@@ -75,16 +75,16 @@ class Points:
             return False
 
     def backup(self):
-        doc = open('points.db', 'rb')
+        doc = open('dbz.db', 'rb')
         bot.send_document(CANALE_LOG, doc, caption="aROMa #database #backup")
         doc.close()
     
     def restore(self,message):
         try:
-            if message.document.file_name=='points.db':
+            if message.document.file_name=='ddbz.db':
                 f = bot.get_file(message.document.file_id)
                 downloaded_file = bot.download_file(f.file_path)
-                with open('points.db', 'wb') as new_file:
+                with open('dbz.db', 'wb') as new_file:
                     new_file.write(downloaded_file)
                 bot.reply_to(message, "Database ripristinato")
         except:
