@@ -285,17 +285,18 @@ class Utente(Base):
     def addRandomExp(self,user,message):
         exp = random.randint(1,5)
         self.addExp(user,exp)
- 
+    print('test addRandomExp')
+
     def addExp(self,utente,exp):
         Database().update_user(utente.id_telegram,{'exp':utente.exp+exp})
-
+    print('test addExp')        
+    
     def addPoints(self, utente, points):  
         try: 
             Database().update_user(utente.id_telegram,{'points':int(utente.points) + int(points)})
         except Exception as e:
             print(e)
             Database().update_table_entry(Utente, "username", utente.username, {'points':int(utente.points) + int(points)})
-
 
     def donaPoints(self,utenteSorgente,utenteTarget,points):
         points = int(points)
@@ -402,7 +403,6 @@ class Steam(Base):
     preso_da = Column('preso_da',String(64))
     steam_key = Column('steam_key', String(32),unique=True)
 
-   
     def buySteamGame(self, probabilita):
         from sqlalchemy import func
         session = Database().Session()
@@ -512,7 +512,7 @@ class Livello(Base):
             if exp >= exp_to_lvl:
                 lv = lv + 1
         return lv
-
+    
     def addLivello(self, lvl, nome, exp_to_lv, link_img, saga, lv_premium):
         session = Database().Session()
         exist = session.query(Livello).filter_by(livello=lvl, lv_premium=lv_premium).first()
@@ -584,7 +584,6 @@ class Livello(Base):
         livello = session.query(Livello).filter_by(livello = level,lv_premium=lv_premium).first()
         Database().update_user(utente.id_telegram,{'livello_selezionato':livello.id})
 
-    
     def listaLivelliDisponibili(self,utente):
         livelloAttuale = utente.livello
         session = Database().Session()
@@ -633,7 +632,7 @@ class Livello(Base):
                     add = 250
                 Utente().addPoints(utenteSorgente,add)
                 bot.reply_to(message,f"Complimenti per questo traguardo! Per te {str(add)} {PointsName}! 🎉\n\n{Utente().infoUser(utenteSorgente)}",parse_mode='markdown')
-
+    print('test checkupdate level')
 
 class GiocoAroma(Base):
     __tablename__ = 'giocoaroma'
@@ -945,5 +944,4 @@ class Collezionabili(Base):
         else:
             self.CreateCollezionabile(id_telegram,tento_oggetto['nome'],quantita)
             bot.reply_to(message,f"Complimenti! Hai ottenuto {oggetto['nome']}")
-
-    
+            
