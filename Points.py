@@ -155,24 +155,24 @@ class Points:
     def album(self):
         answer = ''
         answer += 'Inoltrami un gioco dagli album per acquistarlo.'+'\n\n'
-        answer += '1️⃣ [PS1](t.me/albumps1): Costa 15 '+PointsName+' per gioco'+'\n'
-        answer += '2️⃣ [PS2](t.me/albumps2): Costa 15 '+PointsName+' per gioco'+'\n'
-        answer += '3️⃣ [PS3](t.me/albumps3) Costa 15 '+PointsName+' per gioco'+'\n'
-        answer += '4️⃣ [PS4](t.me/albumps4) Costa 15 '+PointsName+' per gioco'+'\n'
-        answer += '📲 [PSP](t.me/albumpsp) Costa 15 '+PointsName+' per gioco'+'\n'
-        answer += '💻 [PC](https://t.me/+_Hmuw95wjwM3ZmY0) Costa 15 '+PointsName+' per gioco'+'\n'
-        answer += '🐶 [Nintendo](t.me/albumnintendo) Costa 15 '+PointsName+' per gioco'+'\n'
-        answer += '📽 [Cinema](t.me/aROMaCinema) Costa 5 '+PointsName+' per film'+'\n'
-        answer += '🎖 [Premium](t.me/aROMaPremium) Costa 0 '+PointsName+', canale esclusivo agli utenti Premium.'+'\n\n'
-        answer += '[Come guadagnare Frutti Wumpa?](https://t.me/aROMadivideogiochi/2486)'+'\n'
-        answer += '[Cosa puoi fare con i Frutti Wumpa?](https://t.me/aROMadivideogiochi/2402)'
+        answer += '1️⃣ [PS1](t.me/): Costa 15 '+PointsName+' per gioco'+'\n'
+        answer += '2️⃣ [PS2](t.me/): Costa 15 '+PointsName+' per gioco'+'\n'
+        answer += '3️⃣ [PS3](t.me/) Costa 15 '+PointsName+' per gioco'+'\n'
+        answer += '4️⃣ [PS4](t.me/) Costa 15 '+PointsName+' per gioco'+'\n'
+        answer += '📲 [PSP](t.me/) Costa 15 '+PointsName+' per gioco'+'\n'
+        answer += '💻 [PC](https://t.me/) Costa 15 '+PointsName+' per gioco'+'\n'
+        answer += '🐶 [Nintendo](t.me/) Costa 15 '+PointsName+' per gioco'+'\n'
+        answer += '📽 [Cinema](t.me/) Costa 5 '+PointsName+' per film'+'\n'
+        answer += '🎖 [Premium](t.me/) Costa 0 '+PointsName+', canale esclusivo agli utenti Premium.'+'\n\n'
+        answer += '[Come guadagnare Frutti Wumpa?](https://t.me/)'+'\n'
+        answer += '[Cosa puoi fare con i Frutti Wumpa?](https://t.me/)'
         return answer
 
     def welcome(self,message):
         bot.reply_to(message,self.album(),parse_mode='markdown')
         alreadyExist = Utente.checkUtente(Utente,message)
         if alreadyExist == False:
-            bot.reply_to(message, 'Benvenuto su aROMa! Per te 5 '+PointsName+'!', reply_markup=hideBoard)
+            bot.reply_to(message, 'Benvenuto su aRsenioLupin! Per te 50 '+PointsName+'!', reply_markup=hideBoard)
     
     def isValidUsername(self,username):
         if username[0]=='@':
