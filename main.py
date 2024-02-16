@@ -428,7 +428,7 @@ def buy1game(message):
             else:
                 bot.reply_to(message, "Mi dispiace, ti servono "+str(costo)+" "+PointsName+" per comprare questo gioco"+"\n\n"+Utente().infoUser(utenteSorgente),parse_mode='markdown')
         
-        bot.send_message(CANALE_LOG,"L'utente "+utenteSorgente.username+" ha acquistato da "+message.forward_from_chat.title+" https://t.me/c/"+str(from_chat)[4:]+"/"+str(messageid))
+        #bot.send_message(CANALE_LOG,"L'utente "+utenteSorgente.username+" ha acquistato da "+message.forward_from_chat.title+" https://t.me/c/"+str(from_chat)[4:]+"/"+str(messageid))
 
 #bot.infinity_polling()
 
@@ -437,7 +437,7 @@ def inviaUtentiPremium():
     messaggio = '🎖 Utenti Premium 🎖\n\n'
     for i, premium in enumerate(listaPremium, start=1):
         messaggio += f'*[{i}]* {Utente().infoUser(premium)}\n\n'
-    bot.send_message(GRUPPO_AROMA, messaggio, parse_mode='markdown')
+    bot.send_message(Tecnologia_GRUPPO, messaggio, parse_mode='markdown')
 
 
 def inviaLivelli(limite):
@@ -452,19 +452,19 @@ def inviaLivelli(limite):
     for lv in livelli_premium[:limite]:
         messaggio_premium += '*[' + str(lv.livello) + ']* [' + lv.nome + '](' + lv.link_img + ')\t [' + lv.saga + ']💪 ' + str(lv.exp_to_lv) + ' exp.\n'
 
-    bot.send_message(GRUPPO_AROMA, messaggio_normali, parse_mode='markdown')
-    bot.send_message(GRUPPO_AROMA, messaggio_premium, parse_mode='markdown')
+    bot.send_message(Tecnologia_GRUPPO, messaggio_normali, parse_mode='markdown')
+    bot.send_message(Tecnologia_GRUPPO, messaggio_premium, parse_mode='markdown')
 
 
 def backup():
-    doc = open('points.db', 'rb')
-    bot.send_document(CANALE_LOG, doc, caption="aROMa #database #backup")
+    doc = open('dbz.db', 'rb')
+    bot.send_document(CANALE_LOG, doc, caption="Arseniolupin #database #backup")
     doc.close()
 
 def send_album():
     punti = Points.Points()
     msg = punti.album()
-    bot.send_message(GRUPPO_AROMA, msg,parse_mode='markdown' )
+    bot.send_message(Tecnologia_GRUPPO, msg,parse_mode='markdown' )
 
 # Funzione per avviare il programma di promemoria
 def start_reminder_program():
