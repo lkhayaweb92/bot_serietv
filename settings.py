@@ -51,7 +51,7 @@ if TEST:
     Tecnologia_GRUPPO    = TEST_GRUPPO
 else:
     BOT_TOKEN       = SerieTv_TOKEN
-    Tecnologia_GRUPPO    = AROMA_GRUPPO
+    Tecnologia_GRUPPO    = Tecnologia_GRUPPO
 
 PointsName = 'Fagioli Zen 🫘'
 
