@@ -76,7 +76,7 @@ class Points:
 
     def backup(self):
         doc = open('dbz.db', 'rb')
-        bot.send_document(CANALE_LOG, doc, caption="aROMa #database #backup")
+        bot.send_document(CANALE_LOG, doc, caption="ArsenioLupin #database #backup")
         doc.close()
     
     def restore(self,message):
