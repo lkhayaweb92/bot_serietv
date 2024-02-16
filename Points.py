@@ -81,7 +81,7 @@ class Points:
     
     def restore(self,message):
         try:
-            if message.document.file_name=='ddbz.db':
+            if message.document.file_name=='dbz.db':
                 f = bot.get_file(message.document.file_id)
                 downloaded_file = bot.download_file(f.file_path)
                 with open('dbz.db', 'wb') as new_file:
@@ -139,7 +139,7 @@ class Points:
             utente.checkTNT(message,utenteSorgente)
 
             ############## GRUPPO ###################
-            if message.chat.id == GRUPPO_AROMA:
+            if message.chat.id == Tecnologia_GRUPPO:
                 utente.addRandomExp(utenteSorgente,message)
                 #utente.checkCasse(utenteSorgente,message)
                 Collezionabili().maybeDrop(message)
@@ -167,9 +167,6 @@ class Points:
         answer += '[Come guadagnare Frutti Wumpa?](https://t.me/aROMadivideogiochi/2486)'+'\n'
         answer += '[Cosa puoi fare con i Frutti Wumpa?](https://t.me/aROMadivideogiochi/2402)'
         return answer
-
-
-
 
     def welcome(self,message):
         bot.reply_to(message,self.album(),parse_mode='markdown')
