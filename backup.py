@@ -10,7 +10,7 @@ import Points
 
 def backup():
     doc = open('dbz.db', 'rb')
-    bot.send_document(CANALE_LOG, doc, caption="aROMa #database #backup")
+    bot.send_document(CANALE_LOG, doc, caption="ArsenioLupin #database #backup")
     doc.close()
 
 schedule.every().day.at("09:00").do(backup)
