@@ -287,11 +287,9 @@ class Utente(Base):
     def addRandomExp(self,user,message):
         exp = random.randint(1,5)
         self.addExp(user,exp)
-    print('test addRandomExp')
 
     def addExp(self,utente,exp):
         Database().update_user(utente.id_telegram,{'exp':utente.exp+exp})
-    print('test addExp')        
     
     def addPoints(self, utente, points):  
         try: 
@@ -634,7 +632,6 @@ class Livello(Base):
                     add = 250
                 Utente().addPoints(utenteSorgente,add)
                 bot.reply_to(message,f"Complimenti per questo traguardo! Per te {str(add)} {PointsName}! 🎉\n\n{Utente().infoUser(utenteSorgente)}",parse_mode='markdown')
-    print('test checkupdate level')
 
 class GiocoAroma(Base):
     __tablename__ = 'giocoaroma'
