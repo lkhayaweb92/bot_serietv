@@ -286,9 +286,13 @@ class Utente(Base):
 
     def addRandomExp(self,user,message):
         exp = random.randint(1,5)
+        print("exp generato:", exp)
         self.addExp(user,exp)
  
     def addExp(self,utente,exp):
+        print("exp prima:", utente.exp)
+        utente.exp += exp
+        print("exp dopo:", utente.exp)
         Database().update_user(utente.id_telegram,{'exp':utente.exp+exp})
 
     def addPoints(self, utente, points):  
