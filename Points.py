@@ -136,7 +136,7 @@ class Points:
             utenteSorgente = Utente().getUtente(chatid)
 
             Database().checkIsSunday(utenteSorgente,message)
-            #utente.checkTNT(message,utenteSorgente)
+            utente.checkTNT(message,utenteSorgente)
 
             ############## GRUPPO ###################
             if message.chat.id == Tecnologia_GRUPPO:
