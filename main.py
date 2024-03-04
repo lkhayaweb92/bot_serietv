@@ -364,69 +364,95 @@ def handle_inline_buttons(call):
 def addnamegame(message):
     chatid = message.chat.id
     utente = Utente().getUtente(chatid)
-    piattaforma,nomegioco = message.text.split()
-    GiocoUtente().CreateGiocoUtente(chatid,piattaforma,nomegioco) 
-    bot.reply_to(message,'Piattaforma e gioco aggiunti',reply_markup=Database().startMarkup(utente))
+    piattaforma, nomegioco = message.text.split()
+    GiocoUtente().CreateGiocoUtente(chatid, piattaforma, nomegioco) 
+    bot.reply_to(message, 'Piattaforma e gioco aggiunti', reply_markup=Database().startMarkup(utente))
 
-def sendFileGame(chatid,from_chat,messageid):
+def sendFileGame(chatid, from_chat, messageid):
     content_type = 'photo'
-    max_deep = 20
+    max_deep = 1000
     tmp = 0
-    while content_type != 'sticker' and content_type=='photo' and tmp<=max_deep:
+    while content_type != 'sticker' and content_type == 'photo' and tmp <= max_deep:
         try:
             message = bot.forward_message(chatid, from_chat, messageid, protect_content=True)
             content_type = message.content_type
         except:
             pass
         messageid += 1
-        tmp +=1
+        tmp += 1
     tmp = 0
-    while content_type != 'sticker' and content_type!='photo' and tmp<=max_deep:
+    while content_type != 'sticker' and content_type != 'photo' and tmp <= max_deep:
         try:
             message = bot.forward_message(chatid, from_chat, messageid, protect_content=True)
             content_type = message.content_type
         except:
             pass
         messageid += 1
-        tmp +=1
-        
+        tmp += 1
+
 def isPremiumChannel(from_chat):
     premium = False
-    if from_chat==int(PREMIUM_CHANNELS['tutto']): premium= True
+    print("Valore di from_chat:", from_chat)
+    print("Valore associato alla chiave 'tutto' nel dizionario PREMIUM_CHANNELS:", PREMIUM_CHANNELS['tutto'])
+    if from_chat == int(PREMIUM_CHANNELS['tutto']):
+        premium = True
+    print("Valore di premium:", premium)
     return premium
+
+valore_di_test = -1001908210673
+
+# Chiamata alla funzione per eseguire il debug
+isPremiumChannel(valore_di_test)
 
 def isMiscellaniaChannel(from_chat):
     premium = False
     for i in MISCELLANIA:
-        if from_chat==int(MISCELLANIA[i]): premium = True
+        if from_chat == int(MISCELLANIA[i]):
+            premium = True
     return premium
 
 def buy1game(message):
-
     punti = Points.Points()
     chatid = message.chat.id
-    utenteSorgente  = Utente().getUtente(chatid)
-    from_chat =  message.forward_from_chat.id
+    utenteSorgente = Utente().getUtente(chatid)
+    from_chat = message.forward_from_chat.id
+
+    print("Valore di chatid:", chatid)
+    print("Utente sorgente:", utenteSorgente)
+    print("Valore di from_chat:", from_chat)
 
     if from_chat is not None:
-        costo = 5 if isMiscellaniaChannel(from_chat) else 15
+        if utenteSorgente.premium == 1:
+            costo = 0  # Imposta il costo a 0 per gli utenti premium
+        else:
+            costo = 5 if isMiscellaniaChannel(from_chat) else 15
         messageid = message.forward_from_message_id
-        
-        if message.content_type=='photo':
-            if  utenteSorgente.premium==1 and (isPremiumChannel(from_chat) or isMiscellaniaChannel(from_chat)):
-                status = sendFileGame(chatid,from_chat,messageid)
+
+        print("Costo del gioco:", costo)
+        print("Message ID:", messageid)
+        print("Tipo di contenuto del messaggio:", message.content_type)
+
+        if message.content_type == 'photo':
+            print("Il messaggio è una foto")
+
+            if utenteSorgente.premium == 1 and (isPremiumChannel(from_chat) or isMiscellaniaChannel(from_chat)):
+                print("L'utente è premium e il canale è premium o di Miscellania")
+                status = sendFileGame(chatid, from_chat, messageid)
+
                 if status == -1:
-                    bot.reply_to(message,"C'è un problema con questo gioco, contatta un admin")
-            #elif utenteSorgente.premium==0 and (isPremiumChannel(from_chat)):
-                #bot.reply_to(message, "Mi dispiace, solo gli Utenti Premium possono acquistare questo gioco"+'\n\n'+Utente().infoUser(utenteSorgente),parse_mode='markdown')
-            elif utenteSorgente.points>=costo:
-                status = sendFileGame(chatid,from_chat,messageid)
+                    bot.reply_to(message, "C'è un problema con questo gioco, contatta un admin")
+            elif utenteSorgente.points >= costo:
+                print("L'utente ha abbastanza punti per acquistare il gioco")
+                status = sendFileGame(chatid, from_chat, messageid)
+
                 if status == -1:
-                    bot.reply_to(message,"C'è un problema con questo gioco, contatta un admin")
-                Database().update_user(chatid, {'points':utenteSorgente.points-costo})
-                bot.reply_to(message, "Hai mangiato "+str(costo)+" "+PointsName+"\n\n"+Utente().infoUser(utenteSorgente),parse_mode='markdown')
+                    bot.reply_to(message, "C'è un problema con questo gioco, contatta un admin")
+
+                Database().update_user(chatid, {'points': utenteSorgente.points - costo})
+                bot.reply_to(message, "Hai speso " + str(costo) + " " + PointsName + " per comprare questo gioco\n\n" + Utente().infoUser(utenteSorgente), parse_mode='markdown')
             else:
-                bot.reply_to(message, "Mi dispiace, ti servono "+str(costo)+" "+PointsName+" per comprare questo gioco"+"\n\n"+Utente().infoUser(utenteSorgente),parse_mode='markdown')
+                print("L'utente non ha abbastanza punti per acquistare il gioco")
+                bot.reply_to(message, "Mi dispiace, ti servono " + str(costo) + " " + PointsName + " per comprare questo gioco\n\n" + Utente().infoUser(utenteSorgente), parse_mode='markdown')
         
         #bot.send_message(CANALE_LOG,"L'utente "+utenteSorgente.username+" ha acquistato da "+message.forward_from_chat.title+" https://t.me/c/"+str(from_chat)[4:]+"/"+str(messageid))
 
