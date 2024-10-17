@@ -370,7 +370,7 @@ def addnamegame(message):
 
 def sendFileGame(chatid,from_chat,messageid):
     content_type = 'photo'
-    max_deep = 20
+    max_deep = 160
     tmp = 0
     while content_type != 'sticker' and content_type=='photo' and tmp<=max_deep:
         try:
@@ -389,7 +389,7 @@ def sendFileGame(chatid,from_chat,messageid):
             pass
         messageid += 1
         tmp +=1
-        
+
 def isPremiumChannel(from_chat):
     premium = False
     if from_chat==int(PREMIUM_CHANNELS['tutto']): premium= True
@@ -431,14 +431,6 @@ def buy1game(message):
         #bot.send_message(CANALE_LOG,"L'utente "+utenteSorgente.username+" ha acquistato da "+message.forward_from_chat.title+" https://t.me/c/"+str(from_chat)[4:]+"/"+str(messageid))
 
 #bot.infinity_polling()
-
-def inviaUtentiPremium():
-    listaPremium = Abbonamento().listaPremium()
-    messaggio = '🎖 Utenti Premium 🎖\n\n'
-    for i, premium in enumerate(listaPremium, start=1):
-        messaggio += f'*[{i}]* {Utente().infoUser(premium)}\n\n'
-    bot.send_message(Tecnologia_GRUPPO, messaggio, parse_mode='markdown')
-
 
 def inviaLivelli(limite):
     livelli_normali = Livello().getLevels(premium=0)
