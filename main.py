@@ -370,7 +370,7 @@ def addnamegame(message):
 
 def sendFileGame(chatid,from_chat,messageid):
     content_type = 'photo'
-    max_deep = 160
+    max_deep = 300
     tmp = 0
     while content_type != 'sticker' and content_type=='photo' and tmp<=max_deep:
         try:
