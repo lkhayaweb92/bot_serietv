@@ -1,7 +1,7 @@
 from telebot import types
 from settings import *
 from sqlalchemy         import create_engine
-from model import Livello, Steam,Utente, Abbonamento, Database, GiocoUtente,Collezionabili
+from model import Livello, Steam,Utente, Abbonamento, Database, GiocoUtente,Collezionabili, use_dragon_balls_logic
 import Points
 from telebot import util
 import schedule,time,threading
@@ -111,6 +111,19 @@ class BotCommands:
         
 
         self.bot.reply_to(self.message,msg,reply_markup=Database().startMarkup(Utente().getUtente(self.chatid)))
+        
+        # Check for Dragon Balls
+        can_summon_shenron = Collezionabili().checkShenron(self.chatid)
+        can_summon_porunga = Collezionabili().checkPorunga(self.chatid)
+        
+        if can_summon_shenron or can_summon_porunga:
+            markup = types.InlineKeyboardMarkup()
+            if can_summon_shenron:
+                markup.add(types.InlineKeyboardButton("🐉 Evoca Shenron 🐉", callback_data="evoca_shenron"))
+            if can_summon_porunga:
+                markup.add(types.InlineKeyboardButton("🐲 Evoca Porunga 🐲", callback_data="evoca_porunga"))
+            
+            self.bot.send_message(self.chatid, "✨ Hai riunito le Sfere del Drago! ✨", reply_markup=markup)
     def handle_broadcast(self):
         message = self.message
         # Ottieni il messaggio da inviare
@@ -348,7 +361,105 @@ def handle_inline_buttons(call):
 
     action = call.data
 
-    if action.startswith("remove_namegame_"):
+    if action == "evoca_shenron":
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("💰 10000 Fagioli Zen", callback_data="shenron_fagioli"))
+        markup.add(types.InlineKeyboardButton("💪 5000 XP", callback_data="shenron_xp"))
+        bot.edit_message_text("🐉 Ciedimi un desiderio, e io te lo esaudirò! Scegline UNO:", call.message.chat.id, call.message.message_id, reply_markup=markup)
+
+    elif action == "shenron_fagioli":
+        try:
+            use_dragon_balls_logic(user_id, 'Shenron')
+            Database().update_user(user_id, {'points': utente.points + 10000})
+            bot.edit_message_text("🐉 Il tuo desiderio è stato esaudito! Hai ricevuto 10000 Fagioli Zen. Addio!", call.message.chat.id, call.message.message_id)
+        except Exception as e:
+            print(f"Error in shenron_fagioli: {e}")
+            bot.send_message(call.message.chat.id, f"Errore: {e}")
+
+    elif action == "shenron_xp":
+        try:
+            use_dragon_balls_logic(user_id, 'Shenron')
+            Database().update_user(user_id, {'exp': utente.exp + 5000})
+            bot.edit_message_text("🐉 Il tuo desiderio è stato esaudito! Hai ricevuto 5000 XP. Addio!", call.message.chat.id, call.message.message_id)
+        except Exception as e:
+            print(f"Error in shenron_xp: {e}")
+            bot.send_message(call.message.chat.id, f"Errore: {e}")
+
+    elif action == "evoca_porunga":
+        markup = types.InlineKeyboardMarkup()
+        markup.row(types.InlineKeyboardButton("💰 5000 Fagioli Zen", callback_data="porunga_step1_fagioli"))
+        markup.row(types.InlineKeyboardButton("💪 2500 XP", callback_data="porunga_step1_xp"))
+        bot.edit_message_text("🐲 IO SONO PORUNGA! POSSO ESAUDIRE 3 DESIDERI!\n\n1° Desiderio: Scegli tra Fagioli o XP.", call.message.chat.id, call.message.message_id, reply_markup=markup)
+
+    elif action.startswith("porunga_step1_"):
+        scelta = action.split("_")[2]
+        if scelta == "fagioli":
+            Database().update_user(user_id, {'points': utente.points + 5000})
+            msg_conf = "Hai scelto i Fagioli!"
+        else:
+            Database().update_user(user_id, {'exp': utente.exp + 2500})
+            msg_conf = "Hai scelto l'XP!"
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.row(types.InlineKeyboardButton("🧨 Piazza Cassa TNT", callback_data="porunga_step2_tnt"))
+        markup.row(types.InlineKeyboardButton("💥 Piazza Nitro (x2)", callback_data="porunga_step2_nitro"))
+        
+        bot.edit_message_text(f"🐲 {msg_conf} TI RIMANGONO 2 DESIDERI!\n\n2° Desiderio: Scegli cosa piazzare.", call.message.chat.id, call.message.message_id, reply_markup=markup)
+
+    elif action.startswith("porunga_step2_"):
+        scelta = action.split("_")[2]
+        if scelta == "tnt":
+            # Piazza TNT nel gruppo - invia lo sticker e avvia il timer
+            try:
+                sti = open('Stickers/TNT.webp', 'rb')
+                bot.send_sticker(Tecnologia_GRUPPO, sti)
+                sti.close()
+                bot.send_message(Tecnologia_GRUPPO, f"💣 {utente.username if utente.username else utente.nome} ha piazzato una Cassa TNT tramite Porunga! Il prossimo che scrive la calpesterà!")
+                msg_conf = "Hai piazzato una Cassa TNT nel gruppo!"
+            except Exception as e:
+                print(f"Errore piazzamento TNT: {e}")
+                msg_conf = "Errore nel piazzare la TNT!"
+        else:
+            # Piazza 2 Nitro nel gruppo
+            try:
+                for i in range(2):
+                    sti = open('Stickers/Nitro.webp', 'rb')
+                    bot.send_sticker(Tecnologia_GRUPPO, sti)
+                    sti.close()
+                bot.send_message(Tecnologia_GRUPPO, f"💥 {utente.username if utente.username else utente.nome} ha piazzato 2 Casse Nitro tramite Porunga! I prossimi 2 che scrivono le calpesteranno!")
+                msg_conf = "Hai piazzato 2 Nitro nel gruppo!"
+            except Exception as e:
+                print(f"Errore piazzamento Nitro: {e}")
+                msg_conf = "Errore nel piazzare le Nitro!"
+
+        markup = types.InlineKeyboardMarkup()
+        markup.row(types.InlineKeyboardButton("🎁 Accetta 3° Desiderio", callback_data="porunga_step3"))
+        
+        bot.edit_message_text(f"🐲 {msg_conf} TI RIMANE 1 DESIDERIO!\n\n3° Desiderio: Piazza Nitro x3 e Wumpa.", call.message.chat.id, call.message.message_id, reply_markup=markup)
+
+    elif action == "porunga_step3":
+        # 3rd Wish: Nitro x3 and Wumpa (Cassa?)
+        try:
+            # Piazza 3 Nitro nel gruppo
+            for i in range(3):
+                sti = open('Stickers/Nitro.webp', 'rb')
+                bot.send_sticker(Tecnologia_GRUPPO, sti)
+                sti.close()
+            
+            # Piazza 1 Cassa Wumpa nel gruppo
+            sti = open('Stickers/Wumpa_create.webp', 'rb')
+            bot.send_sticker(Tecnologia_GRUPPO, sti)
+            sti.close()
+            
+            bot.send_message(Tecnologia_GRUPPO, f"🐲 {utente.username if utente.username else utente.nome} ha piazzato 3 Casse Nitro e 1 Cassa Wumpa tramite Porunga! I prossimi che scrivono le calpesteranno!")
+            
+            use_dragon_balls_logic(user_id, 'Porunga')
+            bot.edit_message_text("🐲 I TUOI DESIDERI SONO STATI ESAUDITI! ADDIO!", call.message.chat.id, call.message.message_id)
+        except Exception as e:
+            print(f"Errore nel 3° desiderio: {e}")
+            bot.edit_message_text(f"🐲 Errore nell'esaudire il desiderio: {e}", call.message.chat.id, call.message.message_id)
+
+    elif action.startswith("remove_namegame_"):
         parametri = action.replace('remove_namegame_','').split('_')
         id_telegram = parametri[0]
         piattaforma = parametri[1]

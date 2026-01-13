@@ -858,89 +858,160 @@ class Collezionabili(Base):
     def maybeDrop(self, message):
         if message.chat.type == "group" or message.chat.type == "supergroup":
             id_telegram = message.from_user.id
-            with open('items.csv', 'r') as f:
-                items = [
-                    line.split(',')
-                    for line in f.readlines()
-                ]
-            indice_oggetto = random.randint(1, len(items) - 1)
+            try:
+                with open('items.csv', 'r', encoding='utf-8') as f:
+                    lines = [line.strip() for line in f.readlines() if line.strip()]
+                    # Skip header if present (assuming first line is header 'nome,rarita...')
+                    if lines and lines[0].startswith('nome,'):
+                        lines = lines[1:]
+                    
+                    items = [line.split(',') for line in lines]
+            except Exception as e:
+                print(f"Error reading items.csv: {e}")
+                return False
+
+            if not items:
+                return False
+
+            indice_oggetto = random.randint(0, len(items) - 1)
             obj = items[indice_oggetto]
+            
+            # Ensure we have enough columns
+            if len(obj) < 5:
+                return False
+
             tento_oggetto = {}
-            tento_oggetto['nome'] = obj[0]
-            tento_oggetto['rarita'] = int(obj[1])
-            tento_oggetto['massimo_numero_per_drop'] = int(obj[2])
-            tento_oggetto['max_per_persona'] = int(obj[3])
-            tento_oggetto['sticker'] = obj[4].replace('\n','')
+            try:
+                tento_oggetto['nome'] = obj[0]
+                tento_oggetto['rarita'] = int(obj[1])
+                tento_oggetto['massimo_numero_per_drop'] = int(obj[2])
+                tento_oggetto['max_per_persona'] = int(obj[3])
+                tento_oggetto['sticker'] = obj[4].strip() # Remove any remaining whitespace
+            except ValueError:
+                # Handle cases where integer conversion fails
+                return False
 
             oggetto = self.getItemByUser(id_telegram, tento_oggetto['nome'])
-            quantita = random.randint(1,tento_oggetto['massimo_numero_per_drop'])
+            quantita = random.randint(1, tento_oggetto['massimo_numero_per_drop'])
+            
             if oggetto:
-                if oggetto.oggetto==tento_oggetto['nome']:
-                    quantita+=1
-                    if oggetto.quantita==int(tento_oggetto['max_per_persona']):
-                        return 0
+                if oggetto.oggetto == tento_oggetto['nome']:
+                    # Logic: if user already has max items, don't drop
+                    if oggetto.quantita >= tento_oggetto['max_per_persona']:
+                        return False
+                    
+                    # Prevent going over max
+                    if oggetto.quantita + quantita > tento_oggetto['max_per_persona']:
+                        quantita = tento_oggetto['max_per_persona'] - oggetto.quantita
 
-            culo = random.randint(1,tento_oggetto['rarita'])
-            if culo==tento_oggetto['rarita']:
-                sti = open(f"Stickers/{tento_oggetto['sticker']}", 'rb')
-                bot.send_sticker(message.chat.id, sti)
-                self.triggerDrop(message,tento_oggetto,quantita)
-                return True
+            culo = random.randint(1, tento_oggetto['rarita'])
+            if culo == tento_oggetto['rarita']:
+                try:
+                    sti = open(f"Stickers/{tento_oggetto['sticker']}", 'rb')
+                    bot.send_sticker(message.chat.id, sti)
+                    sti.close() # Close the file
+                    self.triggerDrop(message, tento_oggetto, quantita)
+                    return True
+                except FileNotFoundError:
+                    print(f"Sticker not found: Stickers/{tento_oggetto['sticker']}")
+                    return False
             return False
 
                     
+    def tnt_start(self, utente, message):
+        bot.reply_to(message, "💣 Ops!... Hai calpestato una Cassa TNT! Scrivi entro 3 secondi per evitarla!")
+
+        timestamp = datetime.datetime.now()
+        Database().update_user(utente.id_telegram,{
+            'start_tnt':timestamp,
+            'end_tnt': None
+            }
+        )
+
+    def nitroExploded(self, utente, message):
+        wumpa_persi = random.randint(1,5)*-1
+        Utente().addPoints(utente,wumpa_persi)
+        bot.reply_to(message, "💥 Ops!... Hai calpestato una Cassa Nitro! Hai perso "+str(wumpa_persi)+" "+PointsName+"! \n\n"+Utente().infoUser(utente),parse_mode='markdown')
+
+    def cassaWumpa(self, utente, message):
+        wumpa_extra = random.randint(1,5)
+        Utente().addPoints(utente,wumpa_extra)
+        bot.reply_to(message, "📦 Hai trovato una cassa con "+str(wumpa_extra)+" "+PointsName+"!\n\n"+Utente().infoUser(utente),parse_mode='markdown')
+
     def triggerDrop(self,message,oggetto,quantita):
         id_telegram = message.from_user.id
         utente = Utente().getUtente(id_telegram)
-        def tnt_start(utente,message):
-            #sti = open('Stickers/TNT.webp', 'rb')
-            #bot.send_sticker(message.chat.id,sti)
-            bot.reply_to(message, "💣 Ops!... Hai calpestato una Cassa TNT! Scrivi entro 3 secondi per evitarla!")
-
-            timestamp = datetime.datetime.now()
-            Database().update_user(utente.id_telegram,{
-                'start_tnt':timestamp,
-                'end_tnt': None
-                }
-            )
-
-
-        def nitroExploded(utente,message):
-            wumpa_persi = random.randint(1,5)*-1
-            #punti.addExp(utenteSorgente,exp_persi)
-            Utente().addPoints(utente,wumpa_persi)
-            bot.reply_to(message, "💥 Ops!... Hai calpestato una Cassa Nitro! Hai perso "+str(wumpa_persi)+" "+PointsName+"! \n\n"+Utente().infoUser(utente),parse_mode='markdown')
-
-        def cassaWumpa(utente,message):
-            #sti = open('Stickers/Wumpa_create.webp', 'rb')
-            #bot.send_sticker(message.chat.id,sti)
-            wumpa_extra = random.randint(1,5)
-            Utente().addPoints(utente,wumpa_extra)
-            bot.reply_to(message, "📦 Hai trovato una cassa con "+str(wumpa_extra)+" "+PointsName+"!\n\n"+Utente().infoUser(utente),parse_mode='markdown')
         
         def drago(utente,message):
             pass
-            """
-            id_telegram=utente.id_telegram
-            sfere_shenron = session.query(Collezionabili).filter_by(id_telegram=id_telegram, oggetto.like('%La Sfera del Drago Shenron%').all()
-            if len(sfere_shenron)==7:
-                # evoca drago shenron
-                pass
 
-            sfere_polunga = session.query(Collezionabili).filter_by(id_telegram=id_telegram, oggetto.like('%La Sfera del Drago Polunga%').all()
-            if len(sfere_polunga)==7:
-                # evoca drago polunga
-                pass
-            """
         if oggetto['nome']=='TNT':
-            tnt_start(utente,message)
+            self.tnt_start(utente,message)
         elif oggetto['nome']=='Nitro':
-            nitroExploded(utente,message)
+            self.nitroExploded(utente,message)
         elif oggetto['nome']=='Cassa':
-            cassaWumpa(utente,message)
+            self.cassaWumpa(utente,message)
         elif 'La sfera del Drago' in oggetto['nome']:
             drago(utente,message)
         else:
-            self.CreateCollezionabile(id_telegram,tento_oggetto['nome'],quantita)
+            self.CreateCollezionabile(id_telegram,oggetto['nome'],quantita)
             bot.reply_to(message,f"Complimenti! Hai ottenuto {oggetto['nome']}")
             
+
+    def checkShenron(self, id_telegram):
+        session = Database().Session()
+        count = session.query(Collezionabili).filter(
+            Collezionabili.id_telegram == id_telegram,
+            Collezionabili.oggetto.like('La Sfera del Drago Shenron%'),
+            Collezionabili.data_utilizzo == None
+        ).group_by(Collezionabili.oggetto).count()
+        session.close()
+        return count >= 7
+
+    def checkPorunga(self, id_telegram):
+        session = Database().Session()
+        count = session.query(Collezionabili).filter(
+            Collezionabili.id_telegram == id_telegram,
+            Collezionabili.oggetto.like('La Sfera del Drago Porunga%'),
+            Collezionabili.data_utilizzo == None
+        ).group_by(Collezionabili.oggetto).count()
+        session.close()
+        return count >= 7
+
+    def useDragonBalls(self, id_telegram, drago_type):
+        session = Database().Session()
+        balls = session.query(Collezionabili).filter(
+            Collezionabili.id_telegram == id_telegram,
+            Collezionabili.oggetto.like(f'La Sfera del Drago {drago_type}%'),
+            Collezionabili.data_utilizzo == None
+        ).all()
+        
+        consumed_counts = {}
+        for ball in balls:
+            if ball.oggetto not in consumed_counts:
+                ball.data_utilizzo = datetime.datetime.now()
+                consumed_counts[ball.oggetto] = True
+                
+        session.commit()
+        session.close()
+
+def use_dragon_balls_logic(id_telegram, drago_type):
+    try:
+        session = Database().Session()
+        balls = session.query(Collezionabili).filter(
+            Collezionabili.id_telegram == id_telegram,
+            Collezionabili.oggetto.like(f'La Sfera del Drago {drago_type}%'),
+            Collezionabili.data_utilizzo == None
+        ).all()
+        
+        consumed_counts = {}
+        for ball in balls:
+            if ball.oggetto not in consumed_counts:
+                ball.data_utilizzo = datetime.datetime.now()
+                consumed_counts[ball.oggetto] = True
+                
+        session.commit()
+    except Exception as e:
+        print(f"Error in use_dragon_balls_logic: {e}")
+    finally:
+        session.close()
