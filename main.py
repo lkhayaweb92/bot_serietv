@@ -6,6 +6,7 @@ import Points
 from telebot import util
 import schedule,time,threading
 import datetime
+import random
 
 @bot.message_handler(content_types=['left_chat_member'])
 def esciDalGruppo(message):
@@ -26,7 +27,7 @@ def start(message):
     punti = Points.Points()
     punti.welcome(message)
     bot.reply_to(message, "Cosa vuoi fare?", reply_markup=Database().startMarkup(Utente().getUtente(message.chat.id)))
-    any(message)
+    handle_all_messages(message)
 
 class BotCommands:
     def __init__(self, message, bot):
@@ -102,15 +103,29 @@ class BotCommands:
         msg = "📦 Inventario 📦\n\n"
         if inventario:
             for oggetto in inventario:
-                msg += f"🧷 {oggetto.oggetto}"
-                if oggetto.quantita > 1:
-                    msg += f" ({oggetto.quantita})"
-                msg += "\n"
+                if oggetto.oggetto not in ['Nitro', 'Cassa', 'TNT']:
+                    msg += f"🧷 {oggetto.oggetto}"
+                    if oggetto.quantita > 1:
+                        msg += f" ({oggetto.quantita})"
+                    msg += "\n"
         else:
             msg = "Il tuo inventario è vuoto, partecipa attivamente nel gruppo per trovare oggetti preziosi"
         
 
-        self.bot.reply_to(self.message,msg,reply_markup=Database().startMarkup(Utente().getUtente(self.chatid)))
+        keyboard = Database().startMarkup(Utente().getUtente(self.chatid))
+        
+        reply_markup = None
+        if inventario:
+            # Check if there's at least one usable item
+            has_usable_items = any(o.oggetto in ['Nitro', 'Cassa', 'TNT'] for o in inventario)
+            if has_usable_items:
+                reply_markup = types.InlineKeyboardMarkup()
+                reply_markup.add(types.InlineKeyboardButton("🎁 Usa Oggetto", callback_data="use_item_list"))
+        
+        self.bot.reply_to(self.message, msg, reply_markup=reply_markup if reply_markup else keyboard)
+        # If we sent inline keyboard, we still need to make sure the user has the reply keyboard
+        if reply_markup:
+            self.bot.send_message(self.chatid, "Scegli cosa fare dal menu sopra.", reply_markup=keyboard)
         
         # Check for Dragon Balls
         can_summon_shenron = Collezionabili().checkShenron(self.chatid)
@@ -141,21 +156,43 @@ class BotCommands:
 
     def handle_me(self):
         message = self.message
+        chat_id = message.chat.id
         utente = Utente().getUtente(self.chatid)
-        self.bot.reply_to(message, Utente().infoUser(utente),parse_mode='markdown')
+        if not utente:
+            self.bot.reply_to(message, "Utente non trovato.")
+            return
+
+        selectedLevel = Livello().infoLivelloByID(utente.livello_selezionato)
+        info_text = Utente().infoUser(utente)
+        
+        if selectedLevel and selectedLevel.link_img:
+            try:
+                # Use message.chat.id instead of self.chatid to support groups
+                self.bot.send_photo(chat_id, selectedLevel.link_img, caption=info_text, parse_mode='markdown', reply_to_message_id=message.message_id)
+            except Exception as e:
+                print(f"Errore nell'invio della foto: {e}")
+                self.bot.reply_to(message, info_text, parse_mode='markdown')
+        else:
+            self.bot.reply_to(message, info_text, parse_mode='markdown')
 
     def handle_status(self):
         message = self.message
-        utente = Utente().getUtente(message.text.split()[1])
-        self.bot.reply_to(self.message, Utente().infoUser(utente),parse_mode='markdown')
+        try:
+            target = message.text.split()[1]
+            utente = Utente().getUtente(target)
+            if utente:
+                self.bot.reply_to(self.message, Utente().infoUser(utente),parse_mode='markdown')
+            else:
+                self.bot.reply_to(self.message, "Utente non trovato.")
+        except IndexError:
+            self.bot.reply_to(self.message, "Usa: !status @username")
 
     def handle_classifica(self):
-        message = self.message
-        self.bot.send_message(self.chatid, Points.Points().writeClassifica(message),parse_mode='markdown')
+        Points.Points().writeClassifica(self.message)
 
     def handle_stats(self):
         message = self.message
-        self.bot.send_message(self.chatid, Points.Points().wumpaStats(message),parse_mode='markdown')
+        self.bot.reply_to(self.message, Points.Points().wumpaStats(),parse_mode='markdown')
 
     def handle_premium(self):
         message = self.message
@@ -345,7 +382,7 @@ class BotCommands:
     
 
 @bot.message_handler(content_types=util.content_type_media)
-def any(message):
+def handle_all_messages(message):
     Points.Points().checkBeforeAll(message)
     bothandler = BotCommands(message,bot)
     bothandler.handle_all_commands()
@@ -414,7 +451,8 @@ def handle_inline_buttons(call):
                 sti = open('Stickers/TNT.webp', 'rb')
                 bot.send_sticker(Tecnologia_GRUPPO, sti)
                 sti.close()
-                bot.send_message(Tecnologia_GRUPPO, f"💣 {utente.username if utente.username else utente.nome} ha piazzato una Cassa TNT tramite Porunga! Il prossimo che scrive la calpesterà!")
+                bot.send_message(Tecnologia_GRUPPO, f"💣 Qualcuno ha piazzato una Cassa TNT tramite Porunga! Il prossimo che scrive la calpesterà!")
+                Collezionabili().armaTrappola(Tecnologia_GRUPPO, 'TNT')
                 msg_conf = "Hai piazzato una Cassa TNT nel gruppo!"
             except Exception as e:
                 print(f"Errore piazzamento TNT: {e}")
@@ -426,38 +464,98 @@ def handle_inline_buttons(call):
                     sti = open('Stickers/Nitro.webp', 'rb')
                     bot.send_sticker(Tecnologia_GRUPPO, sti)
                     sti.close()
-                bot.send_message(Tecnologia_GRUPPO, f"💥 {utente.username if utente.username else utente.nome} ha piazzato 2 Casse Nitro tramite Porunga! I prossimi 2 che scrivono le calpesteranno!")
+                bot.send_message(Tecnologia_GRUPPO, f"💥 Qualcuno ha piazzato 2 Casse Nitro tramite Porunga! I prossimi 2 che scrivono le calpesteranno!")
+                Collezionabili().armaTrappola(Tecnologia_GRUPPO, 'Nitro')
+                Collezionabili().armaTrappola(Tecnologia_GRUPPO, 'Nitro')
                 msg_conf = "Hai piazzato 2 Nitro nel gruppo!"
             except Exception as e:
                 print(f"Errore piazzamento Nitro: {e}")
                 msg_conf = "Errore nel piazzare le Nitro!"
 
         markup = types.InlineKeyboardMarkup()
-        markup.row(types.InlineKeyboardButton("🎁 Accetta 3° Desiderio", callback_data="porunga_step3"))
+        markup.row(types.InlineKeyboardButton("🎁 Cassa Wumpa (1-1000 Fagioli)", callback_data="porunga_step3_wumpa"))
+        markup.row(types.InlineKeyboardButton("💥 3 Casse Nitro (Inventario)", callback_data="porunga_step3_nitro"))
         
-        bot.edit_message_text(f"🐲 {msg_conf} TI RIMANE 1 DESIDERIO!\n\n3° Desiderio: Piazza Nitro x3 e Wumpa.", call.message.chat.id, call.message.message_id, reply_markup=markup)
+        bot.edit_message_text(f"🐲 {msg_conf} TI RIMANE 1 DESIDERIO!\n\n3° Desiderio: Scegli la tua ricompensa finale.", call.message.chat.id, call.message.message_id, reply_markup=markup)
 
-    elif action == "porunga_step3":
-        # 3rd Wish: Nitro x3 and Wumpa (Cassa?)
+    elif action.startswith("porunga_step3_"):
+        scelta = action.split("_")[2]
         try:
-            # Piazza 3 Nitro nel gruppo
-            for i in range(3):
-                sti = open('Stickers/Nitro.webp', 'rb')
-                bot.send_sticker(Tecnologia_GRUPPO, sti)
-                sti.close()
-            
-            # Piazza 1 Cassa Wumpa nel gruppo
-            sti = open('Stickers/Wumpa_create.webp', 'rb')
-            bot.send_sticker(Tecnologia_GRUPPO, sti)
-            sti.close()
-            
-            bot.send_message(Tecnologia_GRUPPO, f"🐲 {utente.username if utente.username else utente.nome} ha piazzato 3 Casse Nitro e 1 Cassa Wumpa tramite Porunga! I prossimi che scrivono le calpesteranno!")
+            if scelta == "wumpa":
+                regalo = random.randint(1, 1000)
+                Database().update_user(user_id, {'points': utente.points + regalo})
+                msg_final = f"🐲 Hai scelto la Cassa Wumpa e hai trovato {regalo} {PointsName}! I TUOI DESIDERI SONO STATI ESAUDITI! ADDIO!"
+            else:
+                Collezionabili().CreateCollezionabile(user_id, 'Nitro', 3)
+                msg_final = "🐲 Hai scelto 3 Nitro! Sono state aggiunte al tuo inventario. I TUOI DESIDERI SONO STATI ESAUDITI! ADDIO!"
             
             use_dragon_balls_logic(user_id, 'Porunga')
-            bot.edit_message_text("🐲 I TUOI DESIDERI SONO STATI ESAUDITI! ADDIO!", call.message.chat.id, call.message.message_id)
+            bot.edit_message_text(msg_final, call.message.chat.id, call.message.message_id)
         except Exception as e:
             print(f"Errore nel 3° desiderio: {e}")
             bot.edit_message_text(f"🐲 Errore nell'esaudire il desiderio: {e}", call.message.chat.id, call.message.message_id)
+
+    elif action == "use_item_list":
+        inventario = Collezionabili().getInventarioUtente(user_id)
+        if not inventario:
+            bot.answer_callback_query(call.id, "Il tuo inventario è vuoto.")
+            return
+            
+        markup = types.InlineKeyboardMarkup()
+        for oggetto in inventario:
+            # Only allow using certain items for now
+            if oggetto.oggetto in ['Nitro', 'Cassa', 'TNT']:
+                markup.add(types.InlineKeyboardButton(f"🎁 Usa {oggetto.oggetto} ({int(oggetto.quantita)})", callback_data=f"use_item_{oggetto.oggetto}"))
+        
+        if len(markup.keyboard) == 0:
+            bot.answer_callback_query(call.id, "Non hai oggetti utilizzabili al momento.")
+            return
+
+        bot.edit_message_text("Seleziona l'oggetto da usare:", call.message.chat.id, call.message.message_id, reply_markup=markup)
+
+    elif action.startswith("use_item_"):
+        item_name = action.replace("use_item_", "")
+        try:
+            # Verifica se l'utente ha ancora l'oggetto
+            item = Collezionabili().getItemByUser(user_id, item_name)
+            if not item or item.quantita <= 0:
+                bot.answer_callback_query(call.id, "Non hai più questo oggetto.")
+                return
+
+            # Effetto dell'oggetto nel gruppo principale
+            chat_to_send = Tecnologia_GRUPPO
+            
+            if item_name == 'Nitro':
+                sti = open('Stickers/Nitro.webp', 'rb')
+                bot.send_sticker(chat_to_send, sti)
+                sti.close()
+                bot.send_message(chat_to_send, f"💥 Qualcuno ha piazzato una Cassa Nitro dall'inventario! Attenti!")
+                Collezionabili().armaTrappola(chat_to_send, 'Nitro')
+            elif item_name == 'Cassa':
+                sti = open('Stickers/Wumpa_create.webp', 'rb')
+                bot.send_sticker(chat_to_send, sti)
+                sti.close()
+                bot.send_message(chat_to_send, f"📦 {utente.nome} ha piazzato una Cassa Wumpa dall'inventario! Chi la prenderà?")
+                Collezionabili().armaTrappola(chat_to_send, 'Cassa')
+            elif item_name == 'TNT':
+                sti = open('Stickers/TNT.webp', 'rb')
+                bot.send_sticker(chat_to_send, sti)
+                sti.close()
+                bot.send_message(chat_to_send, f"💣 Qualcuno ha piazzato una Cassa TNT dall'inventario! Scappate!")
+                Collezionabili().armaTrappola(chat_to_send, 'TNT')
+            elif 'La Sfera del Drago' in item_name:
+                bot.answer_callback_query(call.id, "Usa il comando 'Sfera' o evoca il Drago dall'inventario se le hai tutte!")
+                return
+            
+            # Consuma l'oggetto
+            Collezionabili().usaOggetto(user_id, item_name)
+            
+            bot.edit_message_text(f"Hai usato {item_name}! L'effetto è stato attivato nel gruppo.", call.message.chat.id, call.message.message_id)
+            bot.answer_callback_query(call.id, f"{item_name} usato!")
+            
+        except Exception as e:
+            print(f"Errore nell'uso dell'oggetto: {e}")
+            bot.answer_callback_query(call.id, "Errore durante l'uso dell'oggetto.")
 
     elif action.startswith("remove_namegame_"):
         parametri = action.replace('remove_namegame_','').split('_')

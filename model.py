@@ -19,7 +19,7 @@ Base = declarative_base()
 
 tento_oggetto={}
 
-livelli = [0, 300, 800, 1500, 2500, 4300, 1725, 2335, 2980, 3760, 4575, 5525, 6510, 7630, 8785, 10075, 11400, 12860, 14355, 15985, 17650, 19450, 21285, 23255, 25260, 27400, 29575,
+livelli = [0, 300, 800, 1500, 1725, 2335, 2500, 2980, 3760, 4300, 4575, 5525, 6510, 7630, 8785, 10075, 11400, 12860, 14355, 15985, 17650, 19450, 21285, 23255, 25260, 27400, 29575,
 31885, 34230, 36710, 39225, 41875, 44560, 47380, 50235, 53225, 56250, 59410, 62605, 65935,70000,75000,80000,85000,90000,95000,100000,105000]
 
 class Database:
@@ -260,22 +260,43 @@ class Utente(Base):
             return "L'utente non esiste"
 
         utente = Utente().getUtente(utenteSorgente.id_telegram)
+        if not utente:
+            return "L'utente non è registrato"
+            
         infoLv = Livello().infoLivello(utente.livello)
         selectedLevel = Livello().infoLivelloByID(utente.livello_selezionato)
         giochiutente = GiocoUtente().getGiochiUtente(utente.id_telegram)
+        
+        # New: get Rank
+        import Points
+        rank = Points.Points().getRank(utente)
 
         nome_utente = utente.nome if utente.username is None else utente.username
         answer = f"🎖 Utente Premium\n" if utente.premium == 1 else ''
-        answer += f"✅ Abbonamento attivo (fino al {str(utenteSorgente.scadenza_premium)[:11]})\n" if utente.abbonamento_attivo == 1 else ''
+        answer += f"✅ Abbonamento attivo (fino al {str(utente.scadenza_premium)[:11]})\n" if utente.abbonamento_attivo == 1 else ''
 
-        if infoLv is not None:
-            answer += f"*👤 {nome_utente}*: {utente.points} {PointsName}\n"
-            answer += f"*💪🏻 Exp*: {utente.exp}/{infoLv.exp_to_lv}\n"
+        answer += f"*👤 {nome_utente}*: {utente.points} {PointsName}\n"
+        answer += f"❤️ *Vita*: {utente.vita}/50\n"
+        answer += f"🏆 *Posizione*: {rank}°\n"
+        
+        # Exp display
+        next_exp = 0
+        infoNextLv = Livello().infoLivello(utente.livello + 1)
+        if infoNextLv:
+            next_exp = infoNextLv.exp_to_lv
+        elif utente.livello < len(livelli):
+            next_exp = livelli[utente.livello]
+            
+        if next_exp > 0:
+            answer += f"*💪🏻 Exp*: {utente.exp}/{next_exp}\n"
+        else:
+            answer += f"*💪🏻 Exp*: {utente.exp}\n"
+            
+        # Character/Level display
+        if selectedLevel:
             answer += f"*🎖 Lv. *{utente.livello} [{selectedLevel.nome}]({selectedLevel.link_img})\n"
             answer += f"*👥 Saga: *{selectedLevel.saga}\n"
         else:
-            answer += f"*👤 {nome_utente}*: {utente.points} {PointsName}\n"
-            answer += f"*💪🏻 Exp*: {utente.exp}\n"
             answer += f"*🎖 Lv. *{utente.livello}\n"
 
         if giochiutente:
@@ -394,6 +415,13 @@ class Domenica(Base):
     id = Column(Integer, primary_key=True)
     last_day = Column('last_day', Date)
     utente = Column('utente', Integer, unique=True)
+
+class Trappola(Base):
+    __tablename__ = "trappole"
+    id = Column(Integer, primary_key=True)
+    idgruppo = Column('id_gruppo', Integer)
+    tipo = Column('tipo', String)
+    data_piazzamento = Column('data_piazzamento', DateTime)
 
 class Steam(Base):
     __tablename__ = "steam"
@@ -609,8 +637,26 @@ class Livello(Base):
             Database().update_user(utenteSorgente.id_telegram,{'livello':lv})
             lvObj = Livello().getLevel(lv)
             lbPremiumObj = Livello().getLevelPremium(lv)
-            bot.reply_to(message,"Complimenti! 🎉 Sei passato al livello "+str(lv)+"! Hai sbloccato il personaggio ["+lvObj.nome+"]("+lvObj.link_img+"), puoi attivarlo scrivendo a @aROMaGameBot 🎉\n\n"+Utente().infoUser(utenteSorgente),parse_mode='markdown')
-            bot.reply_to(message,"È anche disponibile il personaggio ["+lbPremiumObj.nome+"]("+lbPremiumObj.link_img+"), puoi attivarlo scrivendo a @aROMaGameBot!",parse_mode='markdown')
+            
+            if lvObj and lvObj.link_img:
+                try:
+                    # Invia la foto del personaggio sbloccato come complimento nel gruppo
+                    msg_text = f"Complimenti! 🎉 Sei passato al livello {lv}! Hai sbloccato il personaggio [{lvObj.nome}]({lvObj.link_img}) 🎉\n\n{Utente().infoUser(utenteSorgente)}"
+                    bot.send_photo(message.chat.id, lvObj.link_img, caption=msg_text, parse_mode='markdown', reply_to_message_id=message.message_id)
+                except Exception as e:
+                    print(f"Errore invio foto level up: {e}")
+                    bot.reply_to(message, f"Complimenti! 🎉 Sei passato al livello {lv}! Hai sbloccato il personaggio [{lvObj.nome}]({lvObj.link_img}) 🎉\n\n{Utente().infoUser(utenteSorgente)}", parse_mode='markdown')
+            else:
+                bot.reply_to(message, f"Complimenti! 🎉 Sei passato al livello {lv}! 🎉\n\n{Utente().infoUser(utenteSorgente)}", parse_mode='markdown')
+
+            if lbPremiumObj:
+                if lbPremiumObj.link_img:
+                    try:
+                        bot.send_photo(message.chat.id, lbPremiumObj.link_img, caption=f"È anche disponibile il personaggio [{lbPremiumObj.nome}]({lbPremiumObj.link_img}) per gli utenti Premium!", parse_mode='markdown')
+                    except:
+                        bot.reply_to(message, f"È anche disponibile il personaggio [{lbPremiumObj.nome}]({lbPremiumObj.link_img}), puoi attivarlo scrivendo a @aROMaGameBot!", parse_mode='markdown')
+                else:
+                    bot.reply_to(message, f"È anche disponibile il personaggio {lbPremiumObj.nome}, puoi attivarlo scrivendo a @aROMaGameBot!", parse_mode='markdown')
             if lv % 5== 0:
                 if lv==5:
                     add = 40
@@ -787,21 +833,20 @@ class Collezionabili(Base):
 
     def getInventarioUtente(self,id_telegram):
         session = Database().Session()
-        #inventario = session.query(Collezionabili).filter_by(id_telegram=id_telegram,data_utilizzo=None).group_by(Collezionabili.oggetto).order_by(Collezionabili.oggetto).all()
         from sqlalchemy import func
 
         inventario = session.query(
             Collezionabili.oggetto,
-            func.count(Collezionabili.oggetto).label('quantita')
+            func.sum(Collezionabili.quantita).label('quantita')
         ).filter_by(
-            id_telegram=id_telegram, 
+            id_telegram=str(id_telegram), 
             data_utilizzo=None
         ).group_by(
             Collezionabili.oggetto
         ).order_by(
             Collezionabili.oggetto
         ).all()
-
+        session.close()
         return inventario
 
     def getItemByUser(self,id_telegram,nome_oggetto):
@@ -810,9 +855,9 @@ class Collezionabili(Base):
 
         oggetto = session.query(
             Collezionabili.oggetto,
-            func.count(Collezionabili.oggetto).label('quantita')
+            func.sum(Collezionabili.quantita).label('quantita')
         ).filter_by(
-            id_telegram=id_telegram, 
+            id_telegram=str(id_telegram), 
             oggetto=nome_oggetto,
             data_utilizzo=None
         ).group_by(
@@ -820,16 +865,64 @@ class Collezionabili(Base):
         ).order_by(
             Collezionabili.oggetto
         ).first()
-
+        session.close()
         return oggetto
     
     def usaOggetto(self,id_telegram,oggetto):
         session = Database().Session()
-        collezionabile = session.query(Collezionabili).filter_by(id_telegram=id_telegram,oggetto=oggetto).first()
-        collezionabile.data_utilizzo = datetime.datetime.today()
-        session.commit()
+        # Prendi il primo disponibile (non ancora usato)
+        collezionabile = session.query(Collezionabili).filter_by(id_telegram=str(id_telegram), oggetto=oggetto, data_utilizzo=None).first()
+        if collezionabile:
+            if collezionabile.quantita > 1:
+                collezionabile.quantita -= 1
+            else:
+                collezionabile.data_utilizzo = datetime.datetime.now()
+            session.commit()
+            print(f'{id_telegram} ha usato {oggetto}')
         session.close()
-        print(f'{id_telegram} ha usato {oggetto}')
+
+    def armaTrappola(self, id_gruppo, tipo):
+        session = Database().Session()
+        try:
+            trappola = Trappola()
+            trappola.idgruppo = id_gruppo
+            trappola.tipo = tipo
+            trappola.data_piazzamento = datetime.datetime.now()
+            session.add(trappola)
+            session.commit()
+            print(f"Trappola {tipo} armata nel gruppo {id_gruppo}")
+        except Exception as e:
+            session.rollback()
+            print(f"Errore armamento trappola: {e}")
+        finally:
+            session.close()
+
+    def checkTrappole(self, message):
+        id_gruppo = message.chat.id
+        session = Database().Session()
+        # Prendi la trappola più vecchia piazzata nel gruppo
+        trappola = session.query(Trappola).filter_by(idgruppo=id_gruppo).order_by(Trappola.data_piazzamento.asc()).first()
+        session.close()
+        
+        if trappola:
+            # Eliminiamo la trappola prima di scatenare l'effetto per evitare loop
+            session = Database().Session()
+            session.delete(session.query(Trappola).filter_by(id=trappola.id).first())
+            session.commit()
+            session.close()
+            
+            # Scateniamo l'effetto
+            id_telegram = message.from_user.id
+            utente = Utente().getUtente(id_telegram)
+            
+            if trappola.tipo == 'Nitro':
+                self.nitroExploded(utente, message)
+            elif trappola.tipo == 'TNT':
+                self.tnt_start(utente, message)
+            elif trappola.tipo == 'Cassa':
+                self.cassaWumpa(utente, message)
+            return True
+        return False
     """
     #pandas
     def maybeDrop(self,message):

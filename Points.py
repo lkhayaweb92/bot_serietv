@@ -30,28 +30,33 @@ class Points:
 
     def wumpaStats(self):
         session = self.Session()
-        wumpaSupply = session.query(
-            functions.sum(Utente.points)
-        ).scalar()
+        wumpaSupply = session.query(functions.sum(Utente.points)).scalar() or 0
+        wumpaMax = session.query(functions.max(Utente.points)).scalar() or 0
+        wumpaMin = session.query(functions.min(Utente.points)).scalar() or 0
+        numPremium = session.query(functions.sum(Utente.premium)).scalar() or 0
+        abbonamentiAttivi = session.query(functions.sum(Utente.abbonamento_attivo)).scalar() or 0
+        numUsers = session.query(functions.count(Utente.id)).scalar() or 0
+        session.close()
+        
+        msg = "📊 *Statistiche Globali*\n\n"
+        msg += f"🍏 Totale {PointsName}: {wumpaSupply}\n"
+        msg += f"📈 Max {PointsName}: {wumpaMax}\n"
+        msg += f"📉 Min {PointsName}: {wumpaMin}\n"
+        msg += f"👥 Utenti Totali: {numUsers}\n"
+        msg += f"🎖 Utenti Premium: {numPremium}\n"
+        msg += f"✅ Abbonamenti Attivi: {abbonamentiAttivi}\n"
+        return msg
 
-        wumpaMax = session.query(
-            functions.max(Utente.points)
-        ).scalar()
-
-        wumpaMin = session.query(
-            functions.min(Utente.points)
-        ).scalar()
-
-        numPremium = session.query(
-            functions.sum(Utente.premium)
-        ).scalar()
-
-        abbonamentiAttivi = session.query(
-            functions.sum(Utente.abbonamento_attivo)
-        ).scalar()
-
-        numUsers = session.query(functions.count(Utente.id)).scalar()
-        return wumpaSupply,wumpaMax,wumpaMin,numUsers,numPremium,abbonamentiAttivi
+    def getRank(self, utente):
+        session = self.Session()
+        # Calcolo posizione in classifica
+        rank = session.query(Utente).filter(
+            (Utente.livello > utente.livello) |
+            ((Utente.livello == utente.livello) & (Utente.points > utente.points)) |
+            ((Utente.livello == utente.livello) & (Utente.points == utente.points) & (Utente.premium > utente.premium))
+        ).count() + 1
+        session.close()
+        return rank
 
 
     def addAdmin(self,utente):
@@ -100,9 +105,14 @@ class Points:
 
     def setCharacter(self,message):
         utente = Utente().getUtente(message.chat.id)  
-        selectedLevel = Livello().GetLevelByNameLevel(message.text)
-        Livello().setSelectedLevel(utente,selectedLevel.livello,selectedLevel.lv_premium)
-        bot.reply_to(message, "Personaggio "+ message.text +" selezionato!"+"\n\n"+Utente().infoUser(utente),parse_mode='markdown',reply_markup=Database.startMarkup(Database,utente))
+        # Pulisci il nome del personaggio da emoji come 🔓 e spazi extra
+        char_name = message.text.replace('🔓', '').strip()
+        selectedLevel = Livello().GetLevelByNameLevel(char_name)
+        if selectedLevel:
+            Livello().setSelectedLevel(utente,selectedLevel.livello,selectedLevel.lv_premium)
+            bot.reply_to(message, f"Personaggio {char_name} selezionato!\n\n{Utente().infoUser(utente)}",parse_mode='markdown',reply_markup=Database.startMarkup(Database,utente))
+        else:
+            bot.reply_to(message, "Personaggio non trovato.")
         #bot.send_message(CANALE_LOG, "L' utente "+Utente().getUsernameAtLeastName(utente)+" ha selezionato il personaggio "+ message.text +"\n\n"+Utente().infoUser(utente),parse_mode='markdown',reply_markup=Database.startMarkup(Database,utente))
 
     
@@ -140,9 +150,11 @@ class Points:
 
             ############## GRUPPO ###################
             if message.chat.id == Tecnologia_GRUPPO:
-                utente.addRandomExp(utenteSorgente,message)
-                #utente.checkCasse(utenteSorgente,message)
-                Collezionabili().maybeDrop(message)
+                trap_triggered = Collezionabili().checkTrappole(message)
+                if not trap_triggered:
+                    utente.addRandomExp(utenteSorgente,message)
+                    #utente.checkCasse(utenteSorgente,message)
+                    Collezionabili().maybeDrop(message)
         elif message.chat.type == 'private':
             chatid = message.chat.id
         utenteSorgente = utente.getUtente(chatid)
