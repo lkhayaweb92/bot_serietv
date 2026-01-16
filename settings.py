@@ -56,14 +56,14 @@ else:
 PointsName = 'Fagioli Zen 🫘'
 
 PREMIUM_CHANNELS = {
-    'SerieCartoonUniverse'       :    '-1001607428774',
-    'SerieUniverse'       :    '-1001369506956',
-    'tutto'     :    '-1002129338782'
+    'CatalogoPremium'            :    '-1001908210673',
+    'SerieUniverse'              :    '-1001369506956',
 }
 
 ALBUM = {
     'Catalogo SerieCartoonUniverse'    :    '-1001884425320',
-    'Serie'    :    '-1001884425320',
+    'Serie'                            :    '-1001884425320',
+    'SerieCartoonUniverse'             :    '-1001607428774',
 }
 
 MISCELLANIA = {

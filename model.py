@@ -1,7 +1,6 @@
 from ast import Str
 from datetime import date
 from sqlite3 import Timestamp
-from termios import TIOCPKT_FLUSHREAD
 from sqlalchemy                 import create_engine, Column, Table, ForeignKey, MetaData
 from sqlalchemy.orm             import relationship
 from sqlalchemy.ext.declarative import declarative_base
@@ -106,6 +105,25 @@ class Database:
     
     def update_gameuser(self, chatid, kwargs):
         self.update_table_entry(GiocoUtente, "id_telegram", chatid, kwargs) 
+
+    def delete_user_complete(self, chatid):
+        session = self.Session()
+        try:
+            # Delete from Utente
+            session.query(Utente).filter_by(id_telegram=chatid).delete()
+            # Delete from Collezionabili (inventory)
+            session.query(Collezionabili).filter_by(id_telegram=str(chatid)).delete()
+            # Delete from GiocoUtente (games)
+            session.query(GiocoUtente).filter_by(id_telegram=chatid).delete()
+            # Delete from Domenica (bonus)
+            session.query(Domenica).filter_by(utente=chatid).delete()
+            
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            raise e
+        finally:
+            session.close()
 
 def create_table(engine):
     Base.metadata.create_all(engine)

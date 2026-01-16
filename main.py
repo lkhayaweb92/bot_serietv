@@ -13,8 +13,12 @@ import re
 def esciDalGruppo(message):
     chatid = message.left_chat_member.id
     try:
-        Database().update_user(chatid,{'points':0})
-        bot.send_message(CANALE_LOG, f"I punti dell'utente {Utente().getUsernameAtLeastName()} sono stati azzerati perchè è uscito dal gruppo.")
+        username = message.left_chat_member.username
+        name = message.left_chat_member.first_name
+        label = f"@{username}" if username else name
+        
+        Database().delete_user_complete(chatid)
+        bot.send_message(CANALE_LOG, f"L'utente {label} ({chatid}) è uscito dal gruppo. Tutti i suoi dati (punti, premium, inventario) sono stati eliminati definitivamente.")
     except Exception as e:
         print('Errore ',str(e))
 
