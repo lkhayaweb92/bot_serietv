@@ -7,6 +7,7 @@ from telebot import util
 import schedule,time,threading
 import datetime
 import random
+import re
 
 @bot.message_handler(content_types=['left_chat_member'])
 def esciDalGruppo(message):
@@ -336,11 +337,6 @@ class BotCommands:
                         messageid-=1
                 messageid+=1
 
-        #backup_all(PREMIUM_CHANNELS['pc'],PREMIUM_CHANNELS['tutto'])
-        #backup_all(PREMIUM_CHANNELS['nintendo'],PREMIUM_CHANNELS['tutto'])
-        #backup_all(PREMIUM_CHANNELS['ps4'],PREMIUM_CHANNELS['tutto'])
-        #backup_all(PREMIUM_CHANNELS['ps3'],PREMIUM_CHANNELS['tutto'])
-        #backup_all(PREMIUM_CHANNELS['ps2'],PREMIUM_CHANNELS['tutto'])
         #backup_all(PREMIUM_CHANNELS['ps1'],PREMIUM_CHANNELS['tutto'])
         #backup_all(PREMIUM_CHANNELS['psp'],PREMIUM_CHANNELS['tutto'])
         #backup_all(PREMIUM_CHANNELS['horror'],PREMIUM_CHANNELS['tutto'])
@@ -577,31 +573,74 @@ def addnamegame(message):
     GiocoUtente().CreateGiocoUtente(chatid,piattaforma,nomegioco) 
     bot.reply_to(message,'Piattaforma e gioco aggiunti',reply_markup=Database().startMarkup(utente))
 
-def sendFileGame(chatid,from_chat,messageid):
-    content_type = 'photo'
+def extract_link_data(message):
+    if not message:
+        return None, None
+    
+    text = message.caption if message.caption else ""
+    pattern = r't\.me/(?:c/|)([\w\d_]+)/(\d+)'
+    
+    # 1. Check Entities (Hyperlinks)
+    if message.caption_entities:
+        for entity in message.caption_entities:
+            if entity.type == 'text_link':
+                match = re.search(pattern, entity.url)
+                if match: 
+                    chat_id_str, msg_id = match.group(1), int(match.group(2))
+                    return (int("-100" + chat_id_str) if chat_id_str.isdigit() else "@" + chat_id_str), msg_id
+            elif entity.type == 'url':
+                offset = entity.offset
+                length = entity.length
+                url_text = text[offset:offset+length]
+                match = re.search(pattern, url_text)
+                if match:
+                    chat_id_str, msg_id = match.group(1), int(match.group(2))
+                    return (int("-100" + chat_id_str) if chat_id_str.isdigit() else "@" + chat_id_str), msg_id
+
+    # 2. Check Raw Text
+    match = re.search(pattern, text)
+    if match:
+        chat_id_str, msg_id = match.group(1), int(match.group(2))
+        return (int("-100" + chat_id_str) if chat_id_str.isdigit() else "@" + chat_id_str), msg_id
+    
+    return None, None
+
+def sendFileGame(chatid, from_chat, messageid):
     max_deep = 300
     tmp = 0
-    while content_type != 'sticker' and content_type=='photo' and tmp<=max_deep:
+    # First message target for type check
+    first_msg = None
+    try:
+        # We MUST forward at least once to see what it is
+        first_msg = bot.forward_message(chatid, from_chat, messageid, protect_content=True)
+        if first_msg.content_type == 'sticker': return 1
+    except:
+        return -1
+
+    current_type = first_msg.content_type
+    messageid += 1
+    tmp += 1
+
+    # Keep forwarding while it's the SAME type or compatible
+    while tmp <= max_deep:
         try:
-            message = bot.forward_message(chatid, from_chat, messageid, protect_content=True)
-            content_type = message.content_type
+            msg = bot.forward_message(chatid, from_chat, messageid, protect_content=True)
+            if msg.content_type == 'sticker':
+                break
+            if current_type != 'photo' and msg.content_type == 'photo':
+                break
         except:
-            pass
+            break
         messageid += 1
-        tmp +=1
-    tmp = 0
-    while content_type != 'sticker' and content_type!='photo' and tmp<=max_deep:
-        try:
-            message = bot.forward_message(chatid, from_chat, messageid, protect_content=True)
-            content_type = message.content_type
-        except:
-            pass
-        messageid += 1
-        tmp +=1
+        tmp += 1
+    return 1
 
 def isPremiumChannel(from_chat):
     premium = False
-    if from_chat==int(PREMIUM_CHANNELS['tutto']): premium= True
+    for i in PREMIUM_CHANNELS:
+        if from_chat == int(PREMIUM_CHANNELS[i]):
+            premium = True
+            break
     return premium
 
 def isMiscellaniaChannel(from_chat):
@@ -618,16 +657,26 @@ def buy1game(message):
     from_chat =  message.forward_from_chat.id
 
     if from_chat is not None:
-        costo = 5 if isMiscellaniaChannel(from_chat) else 15
+        if isPremiumChannel(from_chat):
+            costo = 0 if utenteSorgente.premium == 1 else 50
+        elif isMiscellaniaChannel(from_chat):
+            costo = 5
+        else:
+            costo = 15
+
         messageid = message.forward_from_message_id
         
         if message.content_type=='photo':
-            if  utenteSorgente.premium==1 and (isPremiumChannel(from_chat) or isMiscellaniaChannel(from_chat)):
-                status = sendFileGame(chatid,from_chat,messageid)
+            if costo == 0:
+                # OPTION B: Link Trick
+                link_chat, link_msg = extract_link_data(message)
+                if link_chat:
+                    status = sendFileGame(chatid, link_chat, link_msg)
+                else:
+                    status = sendFileGame(chatid,from_chat,messageid)
+                
                 if status == -1:
                     bot.reply_to(message,"C'è un problema con questo gioco, contatta un admin")
-            #elif utenteSorgente.premium==0 and (isPremiumChannel(from_chat)):
-                #bot.reply_to(message, "Mi dispiace, solo gli Utenti Premium possono acquistare questo gioco"+'\n\n'+Utente().infoUser(utenteSorgente),parse_mode='markdown')
             elif utenteSorgente.points>=costo:
                 status = sendFileGame(chatid,from_chat,messageid)
                 if status == -1:
