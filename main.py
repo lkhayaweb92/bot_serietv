@@ -22,6 +22,14 @@ def esciDalGruppo(message):
     except Exception as e:
         print('Errore ',str(e))
 
+def compact_db_job():
+    try:
+        count = Database().compact_user_ids()
+        bot.send_message(CANALE_LOG, f"AUTO-CLEAN: Database compattato con successo. {count} utenti ri-indicizzati.")
+    except Exception as e:
+        try: bot.send_message(CANALE_LOG, f"AUTO-CLEAN ERROR: {str(e)}")
+        except: pass
+
 @bot.message_handler(content_types=['new_chat_members'])
 def newmember(message):
     punti = Points.Points()
@@ -29,9 +37,14 @@ def newmember(message):
 
 @bot.message_handler(commands=['start'])
 def start(message):
-    punti = Points.Points()
-    punti.welcome(message)
-    bot.reply_to(message, "Cosa vuoi fare?", reply_markup=Database().startMarkup(Utente().getUtente(message.chat.id)))
+    punti_check = Points.Points().checkBeforeAll(message)
+    if punti_check[0] is None:
+        return
+    
+    Points.Points().welcome(message)
+    # The start menu will be shown by handle_all_commands
+    # but we can explicitly show it for start too
+    bot.reply_to(message, "Cosa vuoi fare?", reply_markup=Database().startMarkup(punti_check[0]))
     handle_all_messages(message)
 
 class BotCommands:
@@ -62,6 +75,7 @@ class BotCommands:
             "extra": self.handle_backup_all,
             "checkPremium":self.handle_checkScadenzaPremiumToAll,
             "broadcast": self.handle_broadcast,
+            "compatta": self.handle_compatta,
             
         }
         self.comandi_generici = {
@@ -243,6 +257,13 @@ class BotCommands:
     def handle_checkScadenzaPremiumToAll(self):
         Points.Points().checkScadenzaPremiumToAll()
 
+    def handle_compatta(self):
+        try:
+            count = Database().compact_user_ids()
+            self.bot.reply_to(self.message, f"✅ Database compattato! {count} utenti ri-indicizzati con ID consecutivi.")
+        except Exception as e:
+            self.bot.reply_to(self.message, f"❌ Errore durante la compattazione: {str(e)}")
+
     def handle_restore(self):
         msg = self.bot.reply_to(self.message,'Inviami il db')
         self.bot.register_next_step_handler(msg,Points.Points().restore)
@@ -381,9 +402,12 @@ class BotCommands:
         self.handle_generic_command()
     
 
-@bot.message_handler(content_types=util.content_type_media)
+@bot.message_handler(content_types=['audio', 'photo', 'voice', 'video', 'document', 'text', 'location', 'contact', 'sticker'])
 def handle_all_messages(message):
-    Points.Points().checkBeforeAll(message)
+    punti_check = Points.Points().checkBeforeAll(message)
+    if punti_check[0] is None:
+        return
+    
     bothandler = BotCommands(message,bot)
     bothandler.handle_all_commands()
 
@@ -725,6 +749,9 @@ def start_reminder_program():
     # Imposta l'orario di esecuzione del promemoria
     schedule.every().day.at("09:00").do(backup)
     schedule.every().day.at("15:00").do(send_album)
+    # Compattazione mensile degli ID
+    schedule.every().month.at("00:00").do(compact_db_job)
+    
     #schedule.every().day.at("20:00").do(inviaLivelli, 40)
     #schedule.every().monday.at("12:00").do(inviaUtentiPremium)
 

@@ -60,6 +60,9 @@ PREMIUM_CHANNELS = {
     'SerieUniverse'              :    '-1001369506956',
 }
 
+REQUIRED_CHANNEL_ID = '-1002054513012' # SerieUniverse
+REQUIRED_CHANNEL_LINK = 'https://t.me/+DdCPXCBMvSIwNTg8' # Esempio di link
+
 ALBUM = {
     'Catalogo SerieCartoonUniverse'    :    '-1001884425320',
     'Serie'                            :    '-1001884425320',

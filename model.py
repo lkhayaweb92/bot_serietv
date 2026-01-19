@@ -4,7 +4,7 @@ from sqlite3 import Timestamp
 from sqlalchemy                 import create_engine, Column, Table, ForeignKey, MetaData
 from sqlalchemy.orm             import relationship
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy                 import (Integer, String, Date, DateTime, Float, Boolean, Text)
+from sqlalchemy                 import (Integer, String, Date, DateTime, Float, Boolean, Text, text)
 from sqlalchemy.orm     import sessionmaker
 from sqlalchemy         import desc,asc
 from settings           import *
@@ -125,6 +125,48 @@ class Database:
         finally:
             session.close()
 
+    def compact_user_ids(self):
+        session = self.Session()
+        try:
+            # 1. Backup all users
+            users = session.query(Utente).order_by(Utente.id).all()
+            user_data = []
+            for u in users:
+                user_data.append({
+                    'id_telegram': u.id_telegram,
+                    'nome': u.nome,
+                    'cognome': u.cognome,
+                    'username': u.username,
+                    'exp': u.exp,
+                    'points': u.points,
+                    'livello': u.livello,
+                    'vita': u.vita,
+                    'premium': u.premium,
+                    'livello_selezionato': u.livello_selezionato,
+                    'start_tnt': u.start_tnt,
+                    'end_tnt': u.end_tnt,
+                    'scadenza_premium': u.scadenza_premium,
+                    'abbonamento_attivo': u.abbonamento_attivo
+                })
+
+            # 2. Clear table
+            session.query(Utente).delete()
+            
+            # 3. Re-insert
+            for data in user_data:
+                new_u = Utente()
+                for key, value in data.items():
+                    setattr(new_u, key, value)
+                session.add(new_u)
+            
+            session.commit()
+            return len(user_data)
+        except Exception as e:
+            session.rollback()
+            raise e
+        finally:
+            session.close()
+
 def create_table(engine):
     Base.metadata.create_all(engine)
 
@@ -202,7 +244,7 @@ class Utente(Base):
                 utente.vita         = 50
                 utente.exp          = 0
                 utente.livello      = 1
-                utente.points       = 10
+                utente.points       = 0
                 utente.premium      = 0
                 utente.livello_selezionato = 1
                 utente.start_tnt = datetime.datetime.now()+relativedelta(month=1)

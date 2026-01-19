@@ -137,11 +137,21 @@ class Points:
         else:
             return "Non posso donare "+PointsName+" negativi"
 
+    def isMember(self, chatid):
+        try:
+            member = bot.get_chat_member(REQUIRED_CHANNEL_ID, chatid)
+            if member.status in ['member', 'administrator', 'creator']:
+                return True
+        except Exception as e:
+            print(f"Errore isMember: {e}")
+        return False
+
     def checkBeforeAll(self,message):
         utente = Utente()
-        utente.checkUtente(message)
+        # utente.checkUtente(message) <- MOVED DOWN
 
         if message.chat.type == "group" or message.chat.type == "supergroup":
+            utente.checkUtente(message) # Create user if interacting in group
             chatid = message.from_user.id
             utenteSorgente = Utente().getUtente(chatid)
 
@@ -157,7 +167,18 @@ class Points:
                     Collezionabili().maybeDrop(message)
         elif message.chat.type == 'private':
             chatid = message.chat.id
+            # Membership Check for Private Chat
+            if not self.isMember(chatid):
+                msg = f"⚠️ *Accesso Negato*\n\nPer usare il bot e scaricare le serie, devi prima unirti al nostro canale ufficiale!\n\n👉 [CLICCA QUI PER UNIRTI]({REQUIRED_CHANNEL_LINK})\n\nDopo esserti unito, scrivi /start per attivare il bot!"
+                bot.send_message(chatid, msg, parse_mode='markdown', disable_web_page_preview=True)
+                return None, None # Stop execution if not member
+            
+            # If member, NOW create/update user
+            utente.checkUtente(message)
+
         utenteSorgente = utente.getUtente(chatid)
+        if not utenteSorgente: return None, None # Safety check
+
         Abbonamento().checkScadenzaPremium(utenteSorgente)
         Livello().checkUpdateLevel(utenteSorgente,message)
         utenteSorgente = Utente().getUtente(chatid)
@@ -181,10 +202,21 @@ class Points:
         return answer
 
     def welcome(self,message):
+        chatid = message.chat.id if message.chat.type == 'private' else message.from_user.id
+        
+        # In private chat, only welcome if member
+        if message.chat.type == 'private' and not self.isMember(chatid):
+            return # checkBeforeAll handles the message
+
         bot.reply_to(message,self.album(),parse_mode='markdown')
-        alreadyExist = Utente.checkUtente(Utente,message)
-        if alreadyExist == False:
-            bot.reply_to(message, 'Benvenuto su aRsenioLupin! Per te 50 '+PointsName+'!', reply_markup=hideBoard)
+        Utente.checkUtente(Utente,message)
+        
+        # Check if user is "new" (Stats at default values)
+        utente = Utente().getUtente(chatid)
+        if utente:
+            if utente.points == 0 and utente.exp == 0 and utente.livello == 1:
+                Utente().addPoints(utente, 50)
+                bot.reply_to(message, f'🌟 Benvenuto ufficiale! Per te **50 {PointsName}** come bonus di benvenuto nel canale!', parse_mode='markdown', reply_markup=hideBoard)
     
     def isValidUsername(self,username):
         if username[0]=='@':
