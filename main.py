@@ -122,8 +122,17 @@ class BotCommands:
         msg = "📦 Inventario 📦\n\n"
         if inventario:
             for oggetto in inventario:
-                if oggetto.oggetto not in ['Nitro', 'Cassa', 'TNT']:
-                    msg += f"🧷 {oggetto.oggetto}"
+                if oggetto.oggetto not in ['TNT']:
+                    if "Sfera del Drago" in oggetto.oggetto:
+                        icon = "🐉"
+                    elif oggetto.oggetto == "Nitro":
+                        icon = "🚀"
+                    elif oggetto.oggetto == "Cassa":
+                        icon = "📦"
+                    else:
+                        icon = "🧷"
+                    
+                    msg += f"{icon} {oggetto.oggetto}"
                     if oggetto.quantita > 1:
                         msg += f" ({oggetto.quantita})"
                     msg += "\n"
@@ -145,6 +154,30 @@ class BotCommands:
         # If we sent inline keyboard, we still need to make sure the user has the reply keyboard
         if reply_markup:
             self.bot.send_message(self.chatid, "Scegli cosa fare dal menu sopra.", reply_markup=keyboard)
+        
+        # Display Dragon Ball Stickers
+        if inventario:
+            try:
+                for oggetto in inventario:
+                    if 'La Sfera del Drago' in oggetto.oggetto:
+                        # Extract info
+                        # Format example: "La Sfera del Drago Shenron 4 stelle"
+                        match = re.search(r'La Sfera del Drago (\w+) (\d+)', oggetto.oggetto)
+                        if match:
+                            drago_type = match.group(1) # Shenron or Porunga
+                            star_num = match.group(2)
+                            
+                            # Handle filename mapping (Fixing typo "Shernon" in files)
+                            file_prefix = "Shernon" if drago_type == "Shenron" else drago_type
+                            filename = f"Stickers/{file_prefix}_{star_num}.webp"
+                            
+                            try:
+                                with open(filename, 'rb') as sticker:
+                                    self.bot.send_sticker(self.chatid, sticker)
+                            except Exception as e:
+                                print(f"Sticker not found: {filename} - {e}")
+            except Exception as e:
+                print(f"Error displaying stickers: {e}")
         
         # Check for Dragon Balls
         can_summon_shenron = Collezionabili().checkShenron(self.chatid)
@@ -476,7 +509,7 @@ def handle_inline_buttons(call):
                 bot.send_sticker(Tecnologia_GRUPPO, sti)
                 sti.close()
                 bot.send_message(Tecnologia_GRUPPO, f"💣 Qualcuno ha piazzato una Cassa TNT tramite Porunga! Il prossimo che scrive la calpesterà!")
-                Collezionabili().armaTrappola(Tecnologia_GRUPPO, 'TNT')
+                Collezionabili().armaTrappola(Tecnologia_GRUPPO, 'TNT', user_id)
                 msg_conf = "Hai piazzato una Cassa TNT nel gruppo!"
             except Exception as e:
                 print(f"Errore piazzamento TNT: {e}")
@@ -489,8 +522,8 @@ def handle_inline_buttons(call):
                     bot.send_sticker(Tecnologia_GRUPPO, sti)
                     sti.close()
                 bot.send_message(Tecnologia_GRUPPO, f"💥 Qualcuno ha piazzato 2 Casse Nitro tramite Porunga! I prossimi 2 che scrivono le calpesteranno!")
-                Collezionabili().armaTrappola(Tecnologia_GRUPPO, 'Nitro')
-                Collezionabili().armaTrappola(Tecnologia_GRUPPO, 'Nitro')
+                Collezionabili().armaTrappola(Tecnologia_GRUPPO, 'Nitro', user_id)
+                Collezionabili().armaTrappola(Tecnologia_GRUPPO, 'Nitro', user_id)
                 msg_conf = "Hai piazzato 2 Nitro nel gruppo!"
             except Exception as e:
                 print(f"Errore piazzamento Nitro: {e}")
@@ -554,19 +587,19 @@ def handle_inline_buttons(call):
                 bot.send_sticker(chat_to_send, sti)
                 sti.close()
                 bot.send_message(chat_to_send, f"💥 Qualcuno ha piazzato una Cassa Nitro dall'inventario! Attenti!")
-                Collezionabili().armaTrappola(chat_to_send, 'Nitro')
+                Collezionabili().armaTrappola(chat_to_send, 'Nitro', user_id)
             elif item_name == 'Cassa':
                 sti = open('Stickers/Wumpa_create.webp', 'rb')
                 bot.send_sticker(chat_to_send, sti)
                 sti.close()
                 bot.send_message(chat_to_send, f"📦 {utente.nome} ha piazzato una Cassa Wumpa dall'inventario! Chi la prenderà?")
-                Collezionabili().armaTrappola(chat_to_send, 'Cassa')
+                Collezionabili().armaTrappola(chat_to_send, 'Cassa', user_id)
             elif item_name == 'TNT':
                 sti = open('Stickers/TNT.webp', 'rb')
                 bot.send_sticker(chat_to_send, sti)
                 sti.close()
                 bot.send_message(chat_to_send, f"💣 Qualcuno ha piazzato una Cassa TNT dall'inventario! Scappate!")
-                Collezionabili().armaTrappola(chat_to_send, 'TNT')
+                Collezionabili().armaTrappola(chat_to_send, 'TNT', user_id)
             elif 'La Sfera del Drago' in item_name:
                 bot.answer_callback_query(call.id, "Usa il comando 'Sfera' o evoca il Drago dall'inventario se le hai tutte!")
                 return

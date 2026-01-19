@@ -482,6 +482,7 @@ class Trappola(Base):
     idgruppo = Column('id_gruppo', Integer)
     tipo = Column('tipo', String)
     data_piazzamento = Column('data_piazzamento', DateTime)
+    id_utente = Column('id_utente', Integer)
 
 class Steam(Base):
     __tablename__ = "steam"
@@ -941,16 +942,17 @@ class Collezionabili(Base):
             print(f'{id_telegram} ha usato {oggetto}')
         session.close()
 
-    def armaTrappola(self, id_gruppo, tipo):
+    def armaTrappola(self, id_gruppo, tipo, id_utente):
         session = Database().Session()
         try:
             trappola = Trappola()
             trappola.idgruppo = id_gruppo
             trappola.tipo = tipo
+            trappola.id_utente = id_utente
             trappola.data_piazzamento = datetime.datetime.now()
             session.add(trappola)
             session.commit()
-            print(f"Trappola {tipo} armata nel gruppo {id_gruppo}")
+            print(f"Trappola {tipo} armata nel gruppo {id_gruppo} da {id_utente}")
         except Exception as e:
             session.rollback()
             print(f"Errore armamento trappola: {e}")
@@ -965,6 +967,14 @@ class Collezionabili(Base):
         session.close()
         
         if trappola:
+            # Check owner
+            id_telegram = message.from_user.id
+            utente = Utente().getUtente(id_telegram)
+            
+            if trappola.id_utente == id_telegram and trappola.tipo == 'Nitro':
+                session.close() # Close session before returning
+                return False
+
             # Eliminiamo la trappola prima di scatenare l'effetto per evitare loop
             session = Database().Session()
             session.delete(session.query(Trappola).filter_by(id=trappola.id).first())
@@ -972,8 +982,6 @@ class Collezionabili(Base):
             session.close()
             
             # Scateniamo l'effetto
-            id_telegram = message.from_user.id
-            utente = Utente().getUtente(id_telegram)
             
             if trappola.tipo == 'Nitro':
                 self.nitroExploded(utente, message)
