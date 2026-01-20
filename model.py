@@ -32,7 +32,7 @@ class DailyShop(Base):
 
 class Database:
     def __init__(self):
-        engine = create_engine('sqlite:///dbz.db')
+        engine = create_engine('sqlite:///dbz.db', connect_args={'timeout': 30})
         create_table(engine)
         self.Session = sessionmaker(bind=engine)
 
@@ -69,12 +69,12 @@ class Database:
             '🧪 Pozione Aura Grande', '🧪 Pozione Aura Enorme'
         ]
 
-        if user_id:
+        if user_id: # user_id is passed but we check GLOBAL stock (id=0)
             import datetime
             session = self.Session()
             oggi = datetime.date.today()
-            # Fetch all daily records for this user today
-            shops = session.query(DailyShop).filter_by(id_utente=user_id, data=oggi).all()
+            # Fetch all daily records for GLOBAL STOCK (id_utente=0) today
+            shops = session.query(DailyShop).filter_by(id_utente=0, data=oggi).all()
             session.close()
 
             # Create a set of exhausted "clean" potion names
@@ -445,6 +445,39 @@ class Utente(Base):
  
     def addExp(self,utente,exp):
         Database().update_user(utente.id_telegram,{'exp':utente.exp+exp})
+        self.addSeasonExp(utente.id_telegram, exp)
+
+    def addSeasonExp(self, user_id, exp):
+        session = Database().Session()
+        try:
+            # 1. Get Active Season
+            season = session.query(Season).filter_by(active=True).first()
+            if not season:
+                return
+
+            # 2. Get User Progress
+            progress = session.query(UserSeasonProgress).filter_by(user_id=user_id, season_id=season.id).first()
+            if not progress:
+                progress = UserSeasonProgress(user_id=user_id, season_id=season.id, season_exp=0, season_level=1)
+                session.add(progress)
+                session.flush()
+
+            progress.season_exp += exp
+            
+            # 3. Check Level Up
+            # Find the tier requirement for the NEXT level
+            next_tier = session.query(SeasonTier).filter_by(season_id=season.id, livello=progress.season_level + 1).first()
+            while next_tier and progress.season_exp >= next_tier.exp_richiesta:
+                progress.season_level += 1
+                # Check for even higher levels (in case of massive XP gain)
+                next_tier = session.query(SeasonTier).filter_by(season_id=season.id, livello=progress.season_level + 1).first()
+            
+            session.commit()
+        except Exception as e:
+            print(f"Error adding Season XP: {e}")
+            session.rollback()
+        finally:
+            session.close()
 
     def addPoints(self, utente, points):  
         try: 
@@ -1165,3 +1198,62 @@ def use_dragon_balls_logic(id_telegram, drago_type):
         print(f"Error in use_dragon_balls_logic: {e}")
     finally:
         session.close()
+
+class Season(Base):
+    __tablename__ = 'season'
+    id = Column(Integer, primary_key=True)
+    numero = Column(Integer)
+    nome = Column(String)
+    data_inizio = Column(Date)
+    data_fine = Column(Date)
+    active = Column(Boolean, default=False)
+
+class SeasonTier(Base):
+    __tablename__ = 'season_tier'
+    id = Column(Integer, primary_key=True)
+    season_id = Column(Integer, ForeignKey('season.id'))
+    livello = Column(Integer)
+    exp_richiesta = Column(Integer)
+    ricompensa_free_tipo = Column(String)
+    ricompensa_free_valore = Column(String)
+    ricompensa_premium_tipo = Column(String)
+    ricompensa_premium_valore = Column(String)
+
+class UserSeasonProgress(Base):
+    __tablename__ = 'user_season_progress'
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('utente.id_Telegram'))
+    season_id = Column(Integer, ForeignKey('season.id'))
+    season_exp = Column(Integer, default=0)
+    season_level = Column(Integer, default=1)
+    is_premium_pass = Column(Boolean, default=False)
+    claimed_tiers = Column(String, default="[]") # JSON list of claimed tier IDs
+
+class BossTemplate(Base):
+    __tablename__ = 'boss_template'
+    id = Column(Integer, primary_key=True)
+    nome = Column(String)
+    image_url = Column(String)
+    hp_max = Column(Integer)
+    atk = Column(Integer)
+    xp_reward_total = Column(Integer)
+    points_reward_total = Column(Integer)
+    season_id = Column(Integer, default=1) # Linked to Season
+
+class ActiveRaid(Base):
+    __tablename__ = 'active_raid'
+    id = Column(Integer, primary_key=True)
+    boss_id = Column(Integer, ForeignKey('boss_template.id'))
+    hp_current = Column(Integer)
+    hp_max = Column(Integer)
+    chat_id = Column(Integer)
+    message_id = Column(Integer)
+    active = Column(Boolean, default=True)
+
+class RaidParticipant(Base):
+    __tablename__ = 'raid_participant'
+    id = Column(Integer, primary_key=True)
+    raid_id = Column(Integer, ForeignKey('active_raid.id'))
+    user_id = Column(Integer, ForeignKey('utente.id_Telegram'))
+    dmg_total = Column(Integer, default=0)
+    last_attack_time = Column(DateTime)

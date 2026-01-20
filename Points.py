@@ -12,7 +12,7 @@ import random
 
 class Points:    
     def __init__(self):
-        engine = create_engine('sqlite:///dbz.db')
+        engine = create_engine('sqlite:///dbz.db', connect_args={'timeout': 30})
         create_table(engine)
         self.Session = sessionmaker(bind=engine)
 
