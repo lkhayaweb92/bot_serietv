@@ -481,22 +481,28 @@ class Utente(Base):
 
     def addPoints(self, utente, points):  
         try: 
-            Database().update_user(utente.id_telegram,{'points':int(utente.points) + int(points)})
+            current_points = int(utente.points or 0)
+            new_points = current_points + int(points)
+            Database().update_user(utente.id_telegram,{'points': new_points})
         except Exception as e:
-            print(e)
-            Database().update_table_entry(Utente, "username", utente.username, {'points':int(utente.points) + int(points)})
+            print(f"Error in addPoints (ID): {e}")
+            current_points = int(utente.points or 0)
+            Database().update_table_entry(Utente, "username", utente.username, {'points': current_points + int(points)})
 
-    def donaPoints(self,utenteSorgente,utenteTarget,points):
+    def donaPoints(self, utenteSorgente, utenteTarget, points):
         points = int(points)
-        if points>0:
-            if int(utenteSorgente.points)>=points:
-                self.addPoints(utenteTarget,points)
-                self.addPoints(utenteSorgente,points*-1)
-                return utenteSorgente.username+" ha donato "+str(points)+ " "+PointsName+ " a "+utenteTarget.username+ "! ❤️"
-            else:
-                return PointsName+" non sufficienti"
+        if points <= 0:
+            return "Non posso donare " + PointsName + " negativi o zero"
+        
+        # Ensure we have fresh data for points
+        sorgente_pts = int(utenteSorgente.points or 0)
+        
+        if sorgente_pts >= points:
+            self.addPoints(utenteTarget, points)
+            self.addPoints(utenteSorgente, -points)
+            return f"{utenteSorgente.username or utenteSorgente.nome} ha donato {points} {PointsName} a {utenteTarget.username or utenteTarget.nome}! ❤️"
         else:
-            return "Non posso donare "+PointsName+" negativi"
+            return f"{PointsName} non sufficienti (Hai: {sorgente_pts})"
     ########################### CASSE WUMPA
     def tnt_end(self,utente):
         timestamp = datetime.datetime.now() 

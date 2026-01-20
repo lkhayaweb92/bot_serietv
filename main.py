@@ -91,6 +91,7 @@ class BotCommands:
         }
         self.comandi_generici = {
             "!dona": self.handle_dona,
+            "/dona": self.handle_dona,
             "/me": self.handle_me,
             "!status": self.handle_status,
             "!classifica": self.handle_classifica,
@@ -751,8 +752,14 @@ class BotCommands:
             return
             
         utenteTarget = Utente().getUtente(target_input)
-       
-        # Use Utente() for donaPoints, not Points()
+        
+        if not utenteSorgente:
+            self.bot.reply_to(message, "❌ Errore: Mittente non trovato nel database.")
+            return
+        if not utenteTarget:
+            self.bot.reply_to(message, f"❌ Errore: Destinatario {target_input} non trovato.")
+            return
+
         messaggio = Utente().donaPoints(utenteSorgente,utenteTarget,points)
         self.bot.reply_to(message,messaggio+'\n\n'+Utente().infoUser(utenteTarget),parse_mode='markdown')
         

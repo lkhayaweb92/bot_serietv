@@ -125,17 +125,7 @@ class Points:
         else:
             return ""
 
-    def donaPoints(self,utenteSorgente,utenteTarget,points):
-        points = int(points)
-        if points>0:
-            if int(utenteSorgente.points)>=points:
-                Utente().addPoints(utenteTarget,points)
-                Utente().addPoints(utenteSorgente,points*-1)
-                return utenteSorgente.username+" ha donato "+str(points)+ " "+PointsName+ " a "+utenteTarget.username+ "! ❤️"
-            else:
-                return PointsName+" non sufficienti"
-        else:
-            return "Non posso donare "+PointsName+" negativi"
+    # donaPoints is now handled in Utente class in model.py
 
     def isMember(self, chatid):
         try:
