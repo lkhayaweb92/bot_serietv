@@ -3,7 +3,7 @@ from sqlalchemy         import create_engine, false, null, true
 from sqlalchemy         import update
 from sqlalchemy         import desc,asc
 from sqlalchemy.orm     import sessionmaker
-from model import Utente,Domenica,Steam,Admin,Livello,Database,Abbonamento,Collezionabili, create_table
+from model import Utente,Domenica,Admin,Livello,Database,Abbonamento,Collezionabili, create_table
 import datetime
 from settings import *
 import datetime

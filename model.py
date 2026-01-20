@@ -21,6 +21,15 @@ tento_oggetto={}
 livelli = [0, 300, 800, 1500, 1725, 2335, 2500, 2980, 3760, 4300, 4575, 5525, 6510, 7630, 8785, 10075, 11400, 12860, 14355, 15985, 17650, 19450, 21285, 23255, 25260, 27400, 29575,
 31885, 34230, 36710, 39225, 41875, 44560, 47380, 50235, 53225, 56250, 59410, 62605, 65935,70000,75000,80000,85000,90000,95000,100000,105000]
 
+
+class DailyShop(Base):
+    __tablename__ = "dailyshop"
+    id = Column(Integer, primary_key=True)
+    id_utente = Column('id_utente', Integer)
+    data = Column('data', Date)
+    tipo_pozione = Column('tipo_pozione', String) # New column
+    pozioni_rimanenti = Column('pozioni_rimanenti', Integer, default=10)
+
 class Database:
     def __init__(self):
         engine = create_engine('sqlite:///dbz.db')
@@ -33,11 +42,11 @@ class Database:
         #markup.add('Compra 1 gioco')
         #markup.add('Cosa puoi fare con i Frutti Wumpa?')
         #markup.add('Come guadagno Frutti Wumpa?')
-        markup.add('ℹ️ info','🎮 Nome in Game','📦 Inventario')
+        markup.add('ℹ️ info','🎮 Nome in Game','📦 Inventario','🧪 Negozio Pozioni')
         if utente is not None:
             if utente.premium==1:
                 markup.add('👤 Scegli il personaggio','👤 Scegli il personaggio 🎖')
-                markup.add('🎫 Compra un gioco steam','🎖 Compro un altro mese')
+                markup.add('🎖 Compro un altro mese')
                 if utente.abbonamento_attivo==1:
                     markup.add('✖️ Disattiva rinnovo automatico')
                 else:
@@ -48,6 +57,42 @@ class Database:
                 markup.add('🎖 Compra abbonamento Premium (1 mese)')
         markup.add('📄 Classifica')
 
+        return markup
+
+    def negozioPozioniMarkup(self, user_id=None):
+        markup = types.ReplyKeyboardMarkup()
+        
+        all_potions = [
+            '🧪 Pozione Rigenerante Piccola', '🧪 Pozione Rigenerante Media',
+            '🧪 Pozione Rigenerante Grande', '🧪 Pozione Rigenerante Enorme',
+            '🧪 Pozione Aura Piccola', '🧪 Pozione Aura Media',
+            '🧪 Pozione Aura Grande', '🧪 Pozione Aura Enorme'
+        ]
+
+        if user_id:
+            import datetime
+            session = self.Session()
+            oggi = datetime.date.today()
+            # Fetch all daily records for this user today
+            shops = session.query(DailyShop).filter_by(id_utente=user_id, data=oggi).all()
+            session.close()
+
+            # Create a set of exhausted "clean" potion names
+            exhausted = {s.tipo_pozione for s in shops if s.pozioni_rimanenti <= 0}
+            
+            # Filter available potions (compare stripped name with DB name)
+            available_potions = [p for p in all_potions if p.replace("🧪 ", "") not in exhausted]
+        else:
+            available_potions = all_potions
+
+        # Add buttons in rows of 2
+        for i in range(0, len(available_potions), 2):
+            if i + 1 < len(available_potions):
+                markup.add(available_potions[i], available_potions[i+1])
+            else:
+                markup.add(available_potions[i])
+
+        markup.add('Indietro')
         return markup
 
     def isSunday(self,utente):
@@ -97,8 +142,7 @@ class Database:
     def update_domenica(self, chatid, kwargs):
         self.update_table_entry(Domenica, "utente", chatid, kwargs)
     
-    def update_steam(self, steamkey, kwargs):
-        self.update_table_entry(Steam, "steam_key", steamkey, kwargs)
+
 
     def update_livello(self, id, kwargs):
         self.update_table_entry(Livello, "id", id, kwargs) 
@@ -229,6 +273,17 @@ class Utente(Base):
     end_tnt = Column('end_tnt',DateTime)
     scadenza_premium = Column('scadenza_premium',DateTime)
     abbonamento_attivo =  Column('abbonamento_attivo',Integer)
+    
+    # New Stats
+    stat_vita = Column('stat_vita', Integer, default=0)
+    stat_aura = Column('stat_aura', Integer, default=0)
+    stat_danno = Column('stat_danno', Integer, default=0)
+    stat_velocita = Column('stat_velocita', Integer, default=0)
+    stat_resistenza = Column('stat_resistenza', Integer, default=0)
+    stat_crit_rate = Column('stat_crit_rate', Integer, default=0)
+    
+    # New Current Aura
+    aura = Column('aura', Integer, default=60)
 
     def CreateUser(self,id_telegram,username,name,last_name):
 
@@ -242,6 +297,7 @@ class Utente(Base):
                 utente.id_telegram  = id_telegram
                 utente.cognome      = last_name
                 utente.vita         = 50
+                utente.aura         = 60
                 utente.exp          = 0
                 utente.livello      = 1
                 utente.points       = 0
@@ -336,7 +392,25 @@ class Utente(Base):
         answer += f"✅ Abbonamento attivo (fino al {str(utente.scadenza_premium)[:11]})\n" if utente.abbonamento_attivo == 1 else ''
 
         answer += f"*👤 {nome_utente}*: {utente.points} {PointsName}\n"
-        answer += f"❤️ *Vita*: {utente.vita}/50\n"
+        try:
+            max_vita = 50 + ((utente.stat_vita or 0) * 10)
+            max_aura = 60 + ((utente.stat_aura or 0) * 5)
+            
+            # Formatta la visualizzazione Vita (es. 50/50)
+            current_vita = utente.vita if utente.vita is not None else 50
+            answer += f"❤️ *Vita*: {current_vita}/{max_vita}\n"
+            
+            # Aura attualmente è sempre al massimo (non c'è consumo)
+            current_aura = utente.aura if utente.aura is not None else 60
+            answer += f"💙 *Aura*: {current_aura}/{max_aura}\n"
+            answer += f"⚔️ *Danno*: {(utente.stat_danno or 0) * 2}\n"
+            answer += f"⚡️ *Velocità*: {(utente.stat_velocita or 0)}\n"
+            answer += f"🛡️ *Resistenza*: {(utente.stat_resistenza or 0)}% (MAX 75%)\n"
+            answer += f"🎯 *Crit Rate*: {(utente.stat_crit_rate or 0)}%\n"
+        except Exception as e:
+            print(f"ERROR calculating stats in infoUser: {e}")
+            answer += "\n(Errore visualizzazione statistiche)\n"
+        
         answer += f"🏆 *Posizione*: {rank}°\n"
         
         # Exp display
@@ -484,92 +558,7 @@ class Trappola(Base):
     data_piazzamento = Column('data_piazzamento', DateTime)
     id_utente = Column('id_utente', Integer)
 
-class Steam(Base):
-    __tablename__ = "steam"
-    id = Column(Integer, primary_key=True)
-    titolo = Column('titolo',String(64))
-    titolone = Column('titolone',Boolean)
-    preso_da = Column('preso_da',String(64))
-    steam_key = Column('steam_key', String(32),unique=True)
 
-    def buySteamGame(self, probabilita):
-        from sqlalchemy import func
-        session = Database().Session()
-        is_sculato = random.randint(1, 100) > (100 - probabilita)
-        gameList = session.query(Steam).filter(Steam.preso_da=='').filter_by(titolone=is_sculato)
-        game = gameList.order_by(func.random()).first()
-        return game, is_sculato
-
-    def buyBronzeGame(self):
-        return self.buySteamGame(10)
-
-    def buySilverGame(self):
-        return self.buySteamGame(50)
-
-    def buyGoldGame(self):
-        return self.buySteamGame(100)
-
-    def buyPlatinumGame(self):
-        session = Database().Session()
-        gameList = session.query(Steam).filter(Steam.preso_da!='').all()
-        return gameList,100
-        
-    def selectSteamGame(self, gameTitle):
-        session = Database().Session()
-        game = session.query(Steam).filter_by(titolo=gameTitle).first()
-        return game
-    
-    def steamCoin(self,message):
-        utente = Utente().getUtente(message.chat.id)
-        if utente.premium == 1:
-            coin_types = {
-                'Bronze Coin'   : {'costo': -50 , 'game_method': self.buyBronzeGame     , 'sti_path': 'Stickers/bronze.webp'},
-                'Silver Coin'   : {'costo': -100, 'game_method': self.buySilverGame     , 'sti_path': 'Stickers/silver.webp'},
-                'Gold Coin'     : {'costo': -150, 'game_method': self.buyGoldGame       , 'sti_path': 'Stickers/gold.webp'},
-                'Platinum Coin' : {'costo': -200, 'game_method': self.buyPlatinumGame   , 'sti_path': 'Stickers/platinum.webp'},
-            }
-            for coin_type, info in coin_types.items():
-                if coin_type in message.text:
-                    costo = info['costo']
-                    game, sculato = info['game_method']()
-                    sti = open(info['sti_path'], 'rb')
-                    bot.send_sticker(message.chat.id, sti)
-                    if coin_type == 'Platinum Coin':
-                        markup = types.ReplyKeyboardMarkup()
-                        for g in game:
-                            markup.add(g.titolo)
-                        msg = bot.reply_to(message,'Scegli il gioco',reply_markup=markup)
-                        bot.register_next_step_handler(msg, self.selectPlatinumSteamGame)
-                    else:
-                        self.sendSteamGame(costo, message, game, sculato)
-                    break
-        else:
-            bot.reply_to(message, "Devi prima essere un Utente Premium\n\n" + Utente().infoUser(utente))
-
-    def selectPlatinumSteamGame(self,message):
-        game = self.selectSteamGame(message.text)
-        self.sendSteamGame(-200,message,game,100)
-
-    def sendSteamGame(self,costo,message,game,sculato):
-        utente = Utente().getUtente(message.chat.id)
-        if utente.points>costo*-1:
-            Utente().addPoints(utente,costo)
-            risposta = "`"+game.titolo+"`\n*Steam Key*: `"+game.steam_key+"`"
-            if sculato == True:
-                bot.reply_to(message,"Complimenti! 🎉 Hai vinto un titolone 🎉!\n"+risposta,parse_mode="Markdown",reply_markup=Database().startMarkup(utente))
-            else:
-                bot.reply_to(message,"Complimenti! 🎉 Ti sei aggiudicato: \n"+risposta,parse_mode="Markdown",reply_markup=Database().startMarkup(utente))
-            Database().update_steam(game.steam_key,{'preso_da': utente.id_telegram})
-        else:
-            bot.reply_to(message,"Mi dispiace, ti servono "+str(costo*-1)+" "+PointsName)
-        
-    def steamMarkup(self):
-        markup = types.ReplyKeyboardMarkup()
-        markup.add('🥉 Bronze Coin (10% di chance di vincere un titolone casuale)')        
-        markup.add('🥈 Silver Coin (50% di chance di vincere un titolone casuale)')        
-        markup.add('🥇 Gold Coin (100% di chance di vincere un titolone casuale)')        
-        markup.add('🎖 Platinum Coin (Gioco a scelta)')
-        return markup
 
 class NomiGiochi(Base):
     __tablename__ = "nomigiochi"

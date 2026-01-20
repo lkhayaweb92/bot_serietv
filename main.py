@@ -1,7 +1,7 @@
 from telebot import types
 from settings import *
 from sqlalchemy         import create_engine
-from model import Livello, Steam,Utente, Abbonamento, Database, GiocoUtente,Collezionabili, use_dragon_balls_logic
+from model import Livello, Utente, Abbonamento, Database, GiocoUtente,Collezionabili, use_dragon_balls_logic
 import Points
 from telebot import util
 import schedule,time,threading
@@ -23,6 +23,9 @@ def esciDalGruppo(message):
         print('Errore ',str(e))
 
 def compact_db_job():
+    if datetime.date.today().day != 1:
+        return
+
     try:
         count = Database().compact_user_ids()
         bot.send_message(CANALE_LOG, f"AUTO-CLEAN: Database compattato con successo. {count} utenti ri-indicizzati.")
@@ -52,8 +55,7 @@ class BotCommands:
         self.bot = bot
         self.message = message
         self.comandi_privati = {
-            "🎫 Compra un gioco steam": self.handle_buy_steam_game,
-            "👤 Scegli il personaggio": self.handle_choose_character,
+            "👤 Scegli il personaggio": self.handle_choose_character_v2,
             
             "Compra abbonamento Premium (1 mese)": self.handle_buy_premium,
             "✖️ Disattiva rinnovo automatico": self.handle_disattiva_abbonamento_premium,
@@ -61,9 +63,13 @@ class BotCommands:
             "classifica": self.handle_classifica,
             "nome in game": self.handle_nome_in_game,
             "compro un altro mese": self.handle_buy_another_month,
-            "info": self.handle_info,
+            "ℹ️ info": self.handle_info,
             "📦 Inventario": self.handle_inventario,
-            
+            "🧪 Negozio Pozioni": self.handle_negozio_pozioni,
+            "🧪 Pozione Rigenerante": self.handle_buy_potion,
+            "🧪 Pozione Aura": self.handle_buy_potion,
+            "📊 ALLOCAZIONE STATISTICHE": self.handle_stats_menu,
+            "Indietro": self.handle_back,  
         }
 
         self.comandi_admin = {
@@ -88,6 +94,8 @@ class BotCommands:
             "album": self.handle_album,
             "!inventario": self.handle_inventario,
             "/inventario": self.handle_inventario,
+            "!negozio_pozioni": self.handle_negozio_pozioni,
+            "/negozio_pozioni": self.handle_negozio_pozioni,
             
         }
         try:
@@ -116,6 +124,191 @@ class BotCommands:
             if command[0].lower() in message.text.lower():
                 command[1]()
                 break
+
+    def handle_negozio_pozioni(self):
+        pozioni = [
+            {"nome": "Pozione Rigenerante Piccola", "prezzo": 100, "effetto": "Rigenera 100 punti"},
+            {"nome": "Pozione Rigenerante Media", "prezzo": 200, "effetto": "Rigenera 200 punti"},
+            {"nome": "Pozione Rigenerante Grande", "prezzo": 500, "effetto": "Rigenera 500 punti"},
+            {"nome": "Pozione Rigenerante Enorme", "prezzo": 1000, "effetto": "Rigenera 1000 punti"},
+            {"nome": "Pozione Aura Piccola", "prezzo": 100, "effetto": "Rigenera 100 punti"},
+            {"nome": "Pozione Aura Media", "prezzo": 200, "effetto": "Rigenera 200 punti"},
+            {"nome": "Pozione Aura Grande", "prezzo": 500, "effetto": "Rigenera 500 punti"},
+            {"nome": "Pozione Aura Enorme", "prezzo": 1000, "effetto": "Rigenera 1000 punti"},
+        ]
+
+        if not pozioni:
+            msg = "Il negozio è vuoto, prova più tardi"
+        else:
+            msg = "🛒 Negozio Pozioni 🛒\n\n"
+            for p in pozioni:
+                msg += (
+                    f"🧪 {p['nome']}\n"
+                    f"💰 Prezzo: {p['prezzo']} fagioli\n"
+                    f"✨ Effetto: {p['effetto']}\n\n"
+                )
+
+        keyboard = Database().negozioPozioniMarkup(self.chatid)
+
+        self.bot.send_message(
+            self.chatid,
+            msg,
+            reply_markup=keyboard
+        )
+
+    def handle_buy_potion(self):
+        import datetime
+        from model import DailyShop
+        
+        # 0. Identify Potion
+        pozioni = {
+            "Piccola": {"costo": 100, "vita": 100},
+            "Media":   {"costo": 200, "vita": 200},
+            "Grande":  {"costo": 500, "vita": 500},
+            "Enorme":  {"costo": 1000, "vita": 1000},
+        }
+        
+        tipo_pozione = None
+        for tipo in pozioni:
+            if tipo in self.message.text:
+                tipo_pozione = tipo
+                break
+        
+        if not tipo_pozione:
+            self.bot.reply_to(self.message, "Tipo di pozione non riconosciuto.")
+            return
+
+        costo = pozioni[tipo_pozione]["costo"]
+        vita_extra = pozioni[tipo_pozione]["vita"]
+        utente = Utente().getUtente(self.chatid)
+        
+        # 1. Check Daily Limit
+        session = Database().Session()
+        oggi = datetime.date.today()
+        # Filter by user, date, AND potion type
+        # Extract full name from message or logic?
+        # Message text IS the potion name e.g. "🧪 Pozione Rigenerante Piccola"
+        full_potion_name = self.message.text.replace("🧪 ", "") # Remove emoji if present
+        
+        daily_shop = session.query(DailyShop).filter_by(id_utente=self.chatid, data=oggi, tipo_pozione=full_potion_name).first()
+        
+        if not daily_shop:
+            daily_shop = DailyShop(id_utente=self.chatid, data=oggi, tipo_pozione=full_potion_name, pozioni_rimanenti=10)
+            session.add(daily_shop)
+            session.commit()
+            
+        if daily_shop.pozioni_rimanenti <= 0:
+            self.bot.reply_to(self.message, f"⛔️ Hai terminato le {full_potion_name} per oggi (10/10)!", reply_markup=Database().negozioPozioniMarkup(self.chatid))
+            session.close()
+            return
+            
+        # 2. Check Funds
+        if utente.points < costo:
+            self.bot.reply_to(self.message, f"❌ Non hai abbastanza {PointsName}! Ti servono {costo} fagioli.", reply_markup=Database().negozioPozioniMarkup(self.chatid))
+            session.close()
+            return
+
+        # 3. Execute Purchase
+        try:
+            # Deduct points
+            Database().update_user(self.chatid, {'points': utente.points - costo})
+            
+            # Add to Inventory
+            # Format: 'Pozione {Type} {Size}'
+            if "Rigenerante" in self.message.text:
+                category = "Rigenerante"
+            elif "Aura" in self.message.text:
+                category = "Aura"
+            else:
+                category = "Rigenerante" # Fallback
+
+            nome_oggetto = f"Pozione {category} {tipo_pozione}"
+            Collezionabili().CreateCollezionabile(self.chatid, nome_oggetto, 1)
+            
+            # Decrement Stock
+            daily_shop.pozioni_rimanenti -= 1
+            session.commit()
+            
+            # Confirm
+            msg = f"✅ Hai acquistato una {nome_oggetto}!\n"
+            msg += f"📦 È stata aggiunta al tuo inventario.\n"
+            msg += f"💰 Costo: {costo}\n"
+            msg += f"📦 Pozioni rimanenti oggi: {daily_shop.pozioni_rimanenti}"
+            
+            utente_updated = Utente().getUtente(self.chatid)
+            self.bot.reply_to(self.message, msg + "\n\n" + Utente().infoUser(utente_updated), reply_markup=Database().negozioPozioniMarkup(self.chatid))
+            
+        except Exception as e:
+            session.rollback()
+            print(f"Errore acquisto pozione: {e}")
+            self.bot.reply_to(self.message, "Errore durante l'acquisto, contatta un admin.")
+        finally:
+            session.close()
+
+    def handle_info(self):
+        try:
+            utente = Utente().getUtente(self.chatid)
+            msg = Utente().infoUser(utente)
+            
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("📊 ALLOCAZIONE STATISTICHE", callback_data="stat_menu"))
+            
+            # Send message with markdown for bold stats
+            self.bot.reply_to(self.message, msg, parse_mode='markdown', reply_markup=markup)
+        except Exception as e:
+            print(f"ERROR in handle_info: {e}")
+            # Fallback without markdown
+            self.bot.reply_to(self.message, msg, reply_markup=markup)
+
+    def handle_stats_menu(self):
+        utente = Utente().getUtente(self.chatid)
+        
+        # Calculate Points
+        total_points = utente.livello * 2
+        used_points = (utente.stat_vita + utente.stat_aura + utente.stat_danno + 
+                       utente.stat_velocita + utente.stat_resistenza + utente.stat_crit_rate)
+        available_points = total_points - used_points
+
+        msg = "📊 ALLOCAZIONE STATISTICHE\n\n"
+        msg += f"🎯 Punti Totali: {total_points} (Livello {utente.livello})\n"
+        msg += f"✅ Punti Usati: {used_points}\n"
+        msg += f"🆓 Punti Disponibili: {available_points}\n\n"
+        msg += "Allocati:\n"
+        msg += f"❤️ Vita: {utente.stat_vita} (+{utente.stat_vita * 10} HP)\n"
+        msg += f"💙 Aura: {utente.stat_aura} (+{utente.stat_aura * 5} MP)\n"
+        msg += f"⚔️ Danno: {utente.stat_danno} (+{utente.stat_danno * 2} DMG)\n"
+        msg += f"⚡️ Velocità: {utente.stat_velocita} (+{utente.stat_velocita})\n"
+        msg += f"🛡️ Resistenza: {utente.stat_resistenza} (+{utente.stat_resistenza}%)\n"
+        msg += f"🎯 Crit Rate: {utente.stat_crit_rate} (+{utente.stat_crit_rate}% / Max 75%)\n\n"
+        
+        if available_points > 0:
+            msg += f"💡 Hai {available_points} punto/i da allocare"
+        else:
+            msg += "✨ Tutti i punti sono stati allocati!"
+
+        # Inline Keyboard
+        markup = types.InlineKeyboardMarkup()
+        if available_points > 0:
+            markup.row(
+                types.InlineKeyboardButton("❤️ +1", callback_data="stat_add_vita"),
+                types.InlineKeyboardButton("💙 +1", callback_data="stat_add_aura")
+            )
+            markup.row(
+                types.InlineKeyboardButton("⚔️ +1", callback_data="stat_add_danno"),
+                types.InlineKeyboardButton("⚡️ +1", callback_data="stat_add_velocita")
+            )
+            markup.row(
+                types.InlineKeyboardButton("🛡️ +1", callback_data="stat_add_resistenza"),
+                types.InlineKeyboardButton("🎯 +1", callback_data="stat_add_crit_rate")
+            )
+        
+        markup.add(types.InlineKeyboardButton("🔄 Reset Statistiche (500 Fagioli)", callback_data="stat_reset"))
+
+        self.bot.send_message(self.chatid, msg, reply_markup=markup)
+
+    def handle_back(self):
+        utente = Utente().getUtente(self.chatid)
+        self.bot.reply_to(self.message, "Torna al menu principale", reply_markup=Database().startMarkup(utente))
 
     def handle_inventario(self):
         inventario = Collezionabili().getInventarioUtente(self.chatid)
@@ -328,26 +521,7 @@ class BotCommands:
         utenteSorgente = Utente().getUtente(self.chatid)
         Abbonamento().buyPremiumExtra(utenteSorgente)
 
-    def handle_buy_steam_game(self):
-        message = self.message
-        risposta = ''
-        risposta += '50 🍑 = 🥉 Bronze Coin: 10% probabilità TITOLONE casuale\n'
-        risposta += '100 🍑 = 🥈 Silver Coin: 50% TITOLONE casuale\n'
-        risposta += '150 🍑 = 🥇 Gold Coin: 100% TITOLONE casuale\n'
-        risposta += '200 🍑 = 🎖 Platinum Coin: TITOLONE a scelta della lista, visibile solo con l\'acquisto del suddetto Coin\n' 
-        msg = bot.reply_to(message,risposta,reply_markup=Steam().steamMarkup())
-        self.bot.register_next_step_handler(msg, Steam().steamCtutoin)
 
-    def handle_info(self):
-        message = self.message
-        utenteSorgente = Utente().getUtente(self.chatid)
-        abbonamento = Abbonamento()
-        punti = Points.Points()
-        messaggio = f"\n\n*Gestione Abbonamento Premium*\nCosto di attivazione (primo mese): {abbonamento.COSTO_PREMIUM} {PointsName}"
-        messaggio += f"\nRinnovo Abbonamento (+1 mese): {abbonamento.COSTO_MANTENIMENTO} {PointsName}\n👥[Link al gruppo](https://t.me/+VtiCEsByTGqN94pv)\n@aROMadivideogiochi\n\n"
-        self.bot.reply_to(message,punti.album(),reply_markup=Database().startMarkup(utenteSorgente),parse_mode='markdown')
-        self.bot.reply_to(message,messaggio,reply_markup=Database().startMarkup(utenteSorgente),parse_mode='markdown')
-        self.bot.reply_to(message,Utente().infoUser(utenteSorgente),reply_markup=Database().startMarkup(utenteSorgente),parse_mode='markdown')
 
     def handle_attiva_abbonamento_premium(self):
         message = self.message
@@ -412,7 +586,8 @@ class BotCommands:
         utente = Utente().getUtente(self.chatid)
         abbonamento.buyPremium(utente)
 
-    def handle_choose_character(self):
+    def handle_choose_character_v2(self):
+        # Handle character selection (v2 fixed)
         message = self.message
         utente = Utente().getUtente(self.chatid)
         punti = Points.Points()
@@ -455,7 +630,166 @@ def handle_inline_buttons(call):
 
     action = call.data
 
-    if action == "evoca_shenron":
+    if action == "stat_menu":
+        # Calculate Points
+        total_points = utente.livello * 2
+        used_points = (utente.stat_vita + utente.stat_aura + utente.stat_danno + 
+                       utente.stat_velocita + utente.stat_resistenza + utente.stat_crit_rate)
+        available_points = total_points - used_points
+
+        msg = "📊 ALLOCAZIONE STATISTICHE\n\n"
+        msg += f"🎯 Punti Totali: {total_points} (Livello {utente.livello})\n"
+        msg += f"✅ Punti Usati: {used_points}\n"
+        msg += f"🆓 Punti Disponibili: {available_points}\n\n"
+        msg += "Allocati:\n"
+        msg += f"❤️ Vita: {utente.stat_vita} (+{utente.stat_vita * 10} HP)\n"
+        msg += f"💙 Aura: {utente.stat_aura} (+{utente.stat_aura * 5} MP)\n"
+        msg += f"⚔️ Danno: {utente.stat_danno} (+{utente.stat_danno * 2} DMG)\n"
+        msg += f"⚡️ Velocità: {utente.stat_velocita} (+{utente.stat_velocita})\n"
+        msg += f"🛡️ Resistenza: {utente.stat_resistenza} (+{utente.stat_resistenza}%)\n"
+        msg += f"🎯 Crit Rate: {utente.stat_crit_rate} (+{utente.stat_crit_rate}% / Max 75%)\n\n"
+        
+        if available_points > 0:
+            msg += f"💡 Hai {available_points} punto/i da allocare"
+        else:
+            msg += "✨ Tutti i punti sono stati allocati!"
+
+        # Inline Keyboard
+        markup = types.InlineKeyboardMarkup()
+        if available_points > 0:
+            markup.row(
+                types.InlineKeyboardButton("❤️ +1", callback_data="stat_add_vita"),
+                types.InlineKeyboardButton("💙 +1", callback_data="stat_add_aura")
+            )
+            markup.row(
+                types.InlineKeyboardButton("⚔️ +1", callback_data="stat_add_danno"),
+                types.InlineKeyboardButton("⚡️ +1", callback_data="stat_add_velocita")
+            )
+            markup.row(
+                types.InlineKeyboardButton("🛡️ +1", callback_data="stat_add_resistenza"),
+                types.InlineKeyboardButton("🎯 +1", callback_data="stat_add_crit_rate")
+            )
+        
+        markup.add(types.InlineKeyboardButton("🔄 Reset Statistiche (500 Fagioli)", callback_data="stat_reset"))
+        bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, reply_markup=markup)
+
+    elif action.startswith("stat_add_"):
+        stat_name = action.replace("stat_add_", "")
+        
+        # Calculate Points
+        total_points = utente.livello * 2
+        used_points = (utente.stat_vita + utente.stat_aura + utente.stat_danno + 
+                       utente.stat_velocita + utente.stat_resistenza + utente.stat_crit_rate)
+        available_points = total_points - used_points
+        
+        if available_points > 0:
+            # Check Crit Rate Cap
+            if stat_name == "crit_rate" and getattr(utente, f"stat_{stat_name}") >= 75:
+                bot.answer_callback_query(call.id, "Hai raggiunto il limite massimo per Crit Rate (75%)!")
+                return
+                
+            # Update DB
+            new_val = getattr(utente, f"stat_{stat_name}") + 1
+            updates = {f"stat_{stat_name}": new_val}
+            
+            Database().update_user(user_id, updates)
+            
+            # Refresh User Data
+            utente = Utente().getUtente(user_id)
+            used_points += 1
+            available_points -= 1
+            
+            # Reconstruct Message
+            msg = "📊 ALLOCAZIONE STATISTICHE\n\n"
+            msg += f"🎯 Punti Totali: {total_points} (Livello {utente.livello})\n"
+            msg += f"✅ Punti Usati: {used_points}\n"
+            msg += f"🆓 Punti Disponibili: {available_points}\n\n"
+            msg += "Allocati:\n"
+            msg += f"❤️ Vita: {utente.stat_vita} (+{utente.stat_vita * 10} HP)\n"
+            msg += f"💙 Aura: {utente.stat_aura} (+{utente.stat_aura * 5} MP)\n"
+            msg += f"⚔️ Danno: {utente.stat_danno} (+{utente.stat_danno * 2} DMG)\n"
+            msg += f"⚡️ Velocità: {utente.stat_velocita} (+{utente.stat_velocita})\n"
+            msg += f"🛡️ Resistenza: {utente.stat_resistenza} (+{utente.stat_resistenza}%)\n"
+            msg += f"🎯 Crit Rate: {utente.stat_crit_rate} (+{utente.stat_crit_rate}% / Max 75%)\n\n"
+            
+            if available_points > 0:
+                msg += f"💡 Hai {available_points} punto/i da allocare"
+            else:
+                msg += "✨ Tutti i punti sono stati allocati!"
+
+            # Inline Keyboard
+            markup = types.InlineKeyboardMarkup()
+            if available_points > 0:
+                markup.row(
+                    types.InlineKeyboardButton("❤️ +1", callback_data="stat_add_vita"),
+                    types.InlineKeyboardButton("💙 +1", callback_data="stat_add_aura")
+                )
+                markup.row(
+                    types.InlineKeyboardButton("⚔️ +1", callback_data="stat_add_danno"),
+                    types.InlineKeyboardButton("⚡️ +1", callback_data="stat_add_velocita")
+                )
+                markup.row(
+                    types.InlineKeyboardButton("🛡️ +1", callback_data="stat_add_resistenza"),
+                    types.InlineKeyboardButton("🎯 +1", callback_data="stat_add_crit_rate")
+                )
+            markup.add(types.InlineKeyboardButton("🔄 Reset Statistiche (500 Fagioli)", callback_data="stat_reset"))
+            
+            bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, reply_markup=markup)
+        else:
+            bot.answer_callback_query(call.id, "Non hai punti disponibili!")
+
+    elif action == "stat_reset":
+        costo_reset = 500
+        if utente.points >= costo_reset:
+            # Reset Stats
+            Database().update_user(user_id, {
+                'points': utente.points - costo_reset,
+                'stat_vita': 0, 'stat_aura': 0, 'stat_danno': 0,
+                'stat_velocita': 0, 'stat_resistenza': 0, 'stat_crit_rate': 0
+            })
+            
+            # Refresh User Data
+            utente = Utente().getUtente(user_id)
+            bot.answer_callback_query(call.id, "Statistiche resettate!")
+            
+            # Reconstruct Message (Fresh Reset)
+            total_points = utente.livello * 2
+            used_points = 0
+            available_points = total_points
+
+            msg = "📊 ALLOCAZIONE STATISTICHE\n\n"
+            msg += f"🎯 Punti Totali: {total_points} (Livello {utente.livello})\n"
+            msg += f"✅ Punti Usati: {used_points}\n"
+            msg += f"🆓 Punti Disponibili: {available_points}\n\n"
+            msg += "Allocati:\n"
+            msg += f"❤️ Vita: {utente.stat_vita} (+0 HP)\n"
+            msg += f"💙 Aura: {utente.stat_aura} (+0 MP)\n"
+            msg += f"⚔️ Danno: {utente.stat_danno} (+0 DMG)\n"
+            msg += f"⚡️ Velocità: {utente.stat_velocita} (+0)\n"
+            msg += f"🛡️ Resistenza: {utente.stat_resistenza} (+0%)\n"
+            msg += f"🎯 Crit Rate: {utente.stat_crit_rate} (+0%)\n\n"
+            msg += f"💡 Hai {available_points} punto/i da allocare"
+
+            markup = types.InlineKeyboardMarkup()
+            markup.row(
+                types.InlineKeyboardButton("❤️ +1", callback_data="stat_add_vita"),
+                types.InlineKeyboardButton("💙 +1", callback_data="stat_add_aura")
+            )
+            markup.row(
+                types.InlineKeyboardButton("⚔️ +1", callback_data="stat_add_danno"),
+                types.InlineKeyboardButton("⚡️ +1", callback_data="stat_add_velocita")
+            )
+            markup.row(
+                types.InlineKeyboardButton("🛡️ +1", callback_data="stat_add_resistenza"),
+                types.InlineKeyboardButton("🎯 +1", callback_data="stat_add_crit_rate")
+            )
+            markup.add(types.InlineKeyboardButton("🔄 Reset Statistiche (500 Fagioli)", callback_data="stat_reset"))
+            
+            bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, reply_markup=markup)
+        else:
+             bot.answer_callback_query(call.id, f"Non hai abbastanza Fagioli! Te ne servono {costo_reset}.")
+
+    elif action == "evoca_shenron":
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("💰 10000 Fagioli Zen", callback_data="shenron_fagioli"))
         markup.add(types.InlineKeyboardButton("💪 5000 XP", callback_data="shenron_xp"))
@@ -561,7 +895,7 @@ def handle_inline_buttons(call):
         markup = types.InlineKeyboardMarkup()
         for oggetto in inventario:
             # Only allow using certain items for now
-            if oggetto.oggetto in ['Nitro', 'Cassa', 'TNT']:
+            if oggetto.oggetto in ['Nitro', 'Cassa', 'TNT'] or 'Pozione' in oggetto.oggetto:
                 markup.add(types.InlineKeyboardButton(f"🎁 Usa {oggetto.oggetto} ({int(oggetto.quantita)})", callback_data=f"use_item_{oggetto.oggetto}"))
         
         if len(markup.keyboard) == 0:
@@ -602,6 +936,46 @@ def handle_inline_buttons(call):
                 Collezionabili().armaTrappola(chat_to_send, 'TNT', user_id)
             elif 'La Sfera del Drago' in item_name:
                 bot.answer_callback_query(call.id, "Usa il comando 'Sfera' o evoca il Drago dall'inventario se le hai tutte!")
+                return
+            elif 'Pozione' in item_name:
+                # Calculate Heal Amount
+                heal_amount = 0
+                if 'Piccola' in item_name: heal_amount = 100
+                elif 'Media' in item_name: heal_amount = 200
+                elif 'Grande' in item_name: heal_amount = 500
+                elif 'Enorme' in item_name: heal_amount = 1000
+                
+                if 'Aura' in item_name:
+                    # Logic for Aura
+                    MAX_AURA = 60 + (utente.stat_aura * 5)
+                    # Use persisted aura value or default to MAX if not set (though migration set it to 60)
+                    current_aura = utente.aura if utente.aura is not None else MAX_AURA 
+                    
+                    if current_aura >= MAX_AURA:
+                        bot.answer_callback_query(call.id, "Hai già l'aura al massimo!")
+                        return
+
+                    new_aura = min(MAX_AURA, current_aura + heal_amount)
+                    Database().update_user(user_id, {'aura': new_aura})
+                    
+                    msg_text = f"🧪 Hai bevuto {item_name}!\n💙 Aura ripristinata: {new_aura}/{MAX_AURA}"
+
+                else:
+                    # Logic for Health (Default/Rigenerante)
+                    MAX_VITA = 50 + (utente.stat_vita * 10)
+                    current_vita = utente.vita if utente.vita is not None else MAX_VITA
+                    
+                    if current_vita >= MAX_VITA:
+                        bot.answer_callback_query(call.id, "Hai già la vita al massimo!")
+                        return
+
+                    new_vita = min(MAX_VITA, current_vita + heal_amount)
+                    Database().update_user(user_id, {'vita': new_vita})
+                    msg_text = f"🧪 Hai bevuto {item_name}!\n❤️ Vita ripristinata: {new_vita}/{MAX_VITA}"
+                
+                Collezionabili().usaOggetto(user_id, item_name)
+                bot.edit_message_text(msg_text, call.message.chat.id, call.message.message_id)
+                bot.answer_callback_query(call.id, "Slurp!")
                 return
             
             # Consuma l'oggetto
@@ -782,8 +1156,8 @@ def start_reminder_program():
     # Imposta l'orario di esecuzione del promemoria
     schedule.every().day.at("09:00").do(backup)
     schedule.every().day.at("15:00").do(send_album)
-    # Compattazione mensile degli ID
-    schedule.every().month.at("00:00").do(compact_db_job)
+    # Compattazione mensile degli ID (check interno per il primo del mese)
+    schedule.every().day.at("00:00").do(compact_db_job)
     
     #schedule.every().day.at("20:00").do(inviaLivelli, 40)
     #schedule.every().monday.at("12:00").do(inviaUtentiPremium)
