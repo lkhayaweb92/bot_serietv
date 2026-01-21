@@ -135,14 +135,14 @@ class BotCommands:
 
     def handle_negozio_pozioni(self):
         pozioni = [
-            {"nome": "Pozione Rigenerante Piccola", "prezzo": 100, "effetto": "Rigenera 100 punti"},
-            {"nome": "Pozione Rigenerante Media", "prezzo": 200, "effetto": "Rigenera 200 punti"},
-            {"nome": "Pozione Rigenerante Grande", "prezzo": 500, "effetto": "Rigenera 500 punti"},
-            {"nome": "Pozione Rigenerante Enorme", "prezzo": 1000, "effetto": "Rigenera 1000 punti"},
-            {"nome": "Pozione Aura Piccola", "prezzo": 100, "effetto": "Rigenera 100 punti"},
-            {"nome": "Pozione Aura Media", "prezzo": 200, "effetto": "Rigenera 200 punti"},
-            {"nome": "Pozione Aura Grande", "prezzo": 500, "effetto": "Rigenera 500 punti"},
-            {"nome": "Pozione Aura Enorme", "prezzo": 1000, "effetto": "Rigenera 1000 punti"},
+            {"nome": "Pozione Rigenerante Piccola", "prezzo": 100, "effetto": "Rigenera il 25% della Vita"},
+            {"nome": "Pozione Rigenerante Media", "prezzo": 200, "effetto": "Rigenera il 50% della Vita"},
+            {"nome": "Pozione Rigenerante Grande", "prezzo": 500, "effetto": "Rigenera il 75% della Vita"},
+            {"nome": "Pozione Rigenerante Enorme", "prezzo": 1000, "effetto": "Rigenera il 100% della Vita"},
+            {"nome": "Pozione Aura Piccola", "prezzo": 100, "effetto": "Rigenera il 25% dell'Aura"},
+            {"nome": "Pozione Aura Media", "prezzo": 200, "effetto": "Rigenera il 50% dell'Aura"},
+            {"nome": "Pozione Aura Grande", "prezzo": 500, "effetto": "Rigenera il 75% dell'Aura"},
+            {"nome": "Pozione Aura Enorme", "prezzo": 1000, "effetto": "Rigenera il 100% dell'Aura"},
         ]
 
         if not pozioni:
@@ -207,7 +207,7 @@ class BotCommands:
             markup = types.InlineKeyboardMarkup()
             markup.row(
                 types.InlineKeyboardButton("⚔️ Attacca", callback_data=f"raid_atk_{raid.id}"),
-                types.InlineKeyboardButton("✨ Attacco Speciale (10 Aura)", callback_data=f"raid_spc_{raid.id}")
+                types.InlineKeyboardButton("✨ Attacco Speciale (60 Aura)", callback_data=f"raid_spc_{raid.id}")
             )
 
             # Send Message (Image or Text)
@@ -511,6 +511,8 @@ class BotCommands:
                         icon = "🚀"
                     elif oggetto.oggetto == "Cassa":
                         icon = "📦"
+                    elif "Pozione" in oggetto.oggetto:
+                        icon = "🧪"
                     else:
                         icon = "🧷"
                     
@@ -527,7 +529,7 @@ class BotCommands:
         reply_markup = None
         if inventario:
             # Check if there's at least one usable item
-            has_usable_items = any(o.oggetto in ['Nitro', 'Cassa', 'TNT'] for o in inventario)
+            has_usable_items = any(o.oggetto in ['Nitro', 'Cassa', 'TNT'] or "Pozione" in o.oggetto for o in inventario)
             if has_usable_items:
                 reply_markup = types.InlineKeyboardMarkup()
                 reply_markup.add(types.InlineKeyboardButton("🎁 Usa Oggetto", callback_data="use_item_list"))
@@ -1225,10 +1227,10 @@ def handle_inline_buttons(call):
             elif 'Pozione' in item_name:
                 # Calculate Heal Amount
                 heal_amount = 0
-                if 'Piccola' in item_name: heal_amount = 100
-                elif 'Media' in item_name: heal_amount = 200
-                elif 'Grande' in item_name: heal_amount = 500
-                elif 'Enorme' in item_name: heal_amount = 1000
+                if 'Piccola' in item_name: percentage = 0.25
+                elif 'Media' in item_name: percentage = 0.50
+                elif 'Grande' in item_name: percentage = 0.75
+                elif 'Enorme' in item_name: percentage = 1.0
                 
                 if 'Aura' in item_name:
                     # Logic for Aura
@@ -1240,6 +1242,7 @@ def handle_inline_buttons(call):
                         bot.answer_callback_query(call.id, "Hai già l'aura al massimo!")
                         return
 
+                    heal_amount = int(MAX_AURA * percentage)
                     new_aura = min(MAX_AURA, current_aura + heal_amount)
                     Database().update_user(user_id, {'aura': new_aura})
                     
@@ -1254,6 +1257,7 @@ def handle_inline_buttons(call):
                         bot.answer_callback_query(call.id, "Hai già la vita al massimo!")
                         return
 
+                    heal_amount = int(MAX_VITA * percentage)
                     new_vita = min(MAX_VITA, current_vita + heal_amount)
                     Database().update_user(user_id, {'vita': new_vita})
                     msg_text = f"🧪 Hai bevuto {item_name}!\n❤️ Vita ripristinata: {new_vita}/{MAX_VITA}"
@@ -1417,6 +1421,12 @@ def handle_inline_buttons(call):
 
             boss = session.get(BossTemplate, raid.boss_id)
             
+            # Fetch live user object from the SAME session
+            utente_live = session.query(Utente).filter_by(id_telegram=user_id).first()
+            if not utente_live:
+                bot.answer_callback_query(call.id, "Errore: utente non trovato.")
+                return
+
             # 1. Cooldown Check
             participant = session.query(RaidParticipant).filter_by(raid_id=raid_id, user_id=user_id).first()
             now = datetime.datetime.now()
@@ -1432,23 +1442,27 @@ def handle_inline_buttons(call):
                 return
 
             # 2. Attack Cost & Dmg
-            stat_danno = utente.stat_danno or 0
-            stat_aura = utente.stat_aura or 0
-            stat_crit = utente.stat_crit_rate or 0
+            stat_danno = utente_live.stat_danno or 0
+            stat_aura = utente_live.stat_aura or 0
+            stat_crit = utente_live.stat_crit_rate or 0
             
             dmg_base = max(1, stat_danno * 2) # Base dmg calc
             attack_name = "Attacco"
             crit = False
             
             if mode == "spc":
-                costo_aura = 10
-                current_aura = utente.aura if utente.aura is not None else (60 + stat_aura * 5)
+                costo_aura = 60
+                current_aura = utente_live.aura if utente_live.aura is not None else (60 + stat_aura * 5)
                 if current_aura < costo_aura:
                     bot.answer_callback_query(call.id, f"❌ Aura insufficiente! Serve {costo_aura}.")
                     return
                 # Consume Aura
-                utente.aura = (utente.aura if utente.aura is not None else (60 + stat_aura * 5)) - costo_aura
-                dmg_base *= 3 # Special multiplier
+                utente_live.aura = (utente_live.aura if utente_live.aura is not None else (60 + stat_aura * 5)) - costo_aura
+                
+                # Special Multiplier scales with Aura stat
+                # Base is 3x, increases by 0.05 for each point in stat_aura
+                aura_multiplier = 3 + (stat_aura * 0.05)
+                dmg_base *= aura_multiplier
                 attack_name = "Attacco Speciale"
 
             # Crit Check
@@ -1465,13 +1479,13 @@ def handle_inline_buttons(call):
             participant.dmg_total += final_dmg
             participant.last_attack_time = now
             
-            log_msg = f"⚔️ {utente.nome} ha usato {attack_name}!\n💥 Danni: {final_dmg}"
+            log_msg = f"⚔️ {utente_live.nome} ha usato {attack_name}!\n💥 Danni: {final_dmg}"
             
             # 4. Boss Retaliation (20% chance)
             if random.randint(1, 100) <= 20:
                 boss_dmg = boss.atk
-                utente.vita = max(0, utente.vita - boss_dmg)
-                log_msg += f"\n⚠️ Il Boss ha contrattaccato! -{boss_dmg} HP a {utente.nome}"
+                utente_live.vita = max(0, utente_live.vita - boss_dmg)
+                log_msg += f"\n⚠️ Il Boss ha contrattaccato! -{boss_dmg} HP a {utente_live.nome}"
             
             bot.answer_callback_query(call.id, f"Hai inflitto {final_dmg} danni!")
             
@@ -1515,7 +1529,7 @@ def handle_inline_buttons(call):
                 markup = types.InlineKeyboardMarkup()
                 markup.row(
                     types.InlineKeyboardButton("⚔️ Attacca", callback_data=f"raid_atk_{raid.id}"),
-                    types.InlineKeyboardButton("✨ Attacco Speciale (10 Aura)", callback_data=f"raid_spc_{raid.id}")
+                    types.InlineKeyboardButton("✨ Attacco Speciale (60 Aura)", callback_data=f"raid_spc_{raid.id}")
                 )
                 bot.edit_message_caption(chat_id=raid.chat_id, message_id=raid.message_id, caption=msg_text, parse_mode='Markdown', reply_markup=markup)
             else:
@@ -1579,7 +1593,7 @@ def spawn_random_seasonal_boss():
         markup = types.InlineKeyboardMarkup()
         markup.row(
             types.InlineKeyboardButton("⚔️ Attacca", callback_data=f"raid_atk_{raid.id}"),
-            types.InlineKeyboardButton("✨ Attacco Speciale (10 Aura)", callback_data=f"raid_spc_{raid.id}")
+            types.InlineKeyboardButton("✨ Attacco Speciale (60 Aura)", callback_data=f"raid_spc_{raid.id}")
         )
 
         if boss.image_url:
