@@ -23,6 +23,13 @@ def esciDalGruppo(message):
         print('Errore ',str(e))
 
 def compact_db_job():
+    # 1. Season Lifecycle Check (Daily)
+    try:
+        check_season_expiry()
+    except Exception as e:
+        print(f"Season Cycle Error: {e}")
+
+    # 2. Database Compaction (Monthly - 1st day)
     if datetime.date.today().day != 1:
         return
 
@@ -64,10 +71,12 @@ class BotCommands:
             "nome in game": self.handle_nome_in_game,
             "compro un altro mese": self.handle_buy_another_month,
             "ℹ️ info": self.handle_info,
-            "📦 Inventario": self.handle_inventario,
-            "🧪 Negozio Pozioni": self.handle_negozio_pozioni,
+            "🎒 Inventario": self.handle_inventario,
+            "🛒 Negozio": self.handle_negozio_pozioni,
             "🧪 Pozione Rigenerante": self.handle_buy_potion,
             "🧪 Pozione Aura": self.handle_buy_potion,
+            "📟 Radar Cercasfere": self.handle_buy_radar,
+            "🔋 Cariche Radar": self.handle_buy_radar,
             "📊 ALLOCAZIONE STATISTICHE": self.handle_stats_menu,
             "Indietro": self.handle_back,  
         }
@@ -87,7 +96,11 @@ class BotCommands:
             "season_addtier": self.handle_season_addtier,
             "set_boss_img": self.handle_set_boss_img,
             "add_boss": self.handle_add_boss,
-            
+            "add_saga_boss": self.handle_add_saga_boss,
+            "season_list": self.handle_season_list,
+            "season_set": self.handle_season_set,
+            "spawn_random": self.handle_spawn_random,
+            "boss_list": self.handle_boss_list,
         }
         self.comandi_generici = {
             "!dona": self.handle_dona,
@@ -104,7 +117,8 @@ class BotCommands:
             "/negozio_pozioni": self.handle_negozio_pozioni,
             "!pass": self.handle_pass,
             "/pass": self.handle_pass,
-            
+            "!saga": self.handle_saga,
+            "/saga": self.handle_saga,
         }
         try:
             self.chatid = message.from_user.id
@@ -140,15 +154,21 @@ class BotCommands:
             {"nome": "Pozione Rigenerante Grande", "prezzo": 500, "effetto": "Rigenera il 75% della Vita"},
             {"nome": "Pozione Rigenerante Enorme", "prezzo": 1000, "effetto": "Rigenera il 100% della Vita"},
             {"nome": "Pozione Aura Piccola", "prezzo": 100, "effetto": "Rigenera il 25% dell'Aura"},
-            {"nome": "Pozione Aura Media", "prezzo": 200, "effetto": "Rigenera il 50% dell'Aura"},
             {"nome": "Pozione Aura Grande", "prezzo": 500, "effetto": "Rigenera il 75% dell'Aura"},
             {"nome": "Pozione Aura Enorme", "prezzo": 1000, "effetto": "Rigenera il 100% dell'Aura"},
         ]
 
+        # Dynamic Radar Text
+        radar = Collezionabili().getItemByUser(self.chatid, "Radar Cercasfere")
+        if radar:
+            pozioni.append({"nome": "Cariche Radar", "prezzo": 1000, "effetto": "+10 Cariche (Personal 24h, Global 48h Stock)"})
+        else:
+            pozioni.append({"nome": "Radar Cercasfere", "prezzo": 1500, "effetto": "Ottieni il Radar (Personal 24h, Global 48h Stock)"})
+
         if not pozioni:
             msg = "Il negozio è vuoto, prova più tardi"
         else:
-            msg = "🛒 Negozio Pozioni 🛒\n\n"
+            msg = "🛒 Negozio 🛒\n\n"
             for p in pozioni:
                 msg += (
                     f"🧪 {p['nome']}\n"
@@ -219,37 +239,76 @@ class BotCommands:
             # Save Message ID
             raid.message_id = sent_msg.message_id
             session.commit()
-            bot.send_message(self.chatid, "Boss spawnato con successo!")
+            bot.reply_to(self.message, f"✅ Boss {boss.nome} spawnato con successo nel gruppo!")
 
         except Exception as e:
             print(f"Error spawning boss: {e}")
-            bot.send_message(self.chatid, f"Error: {e}")
+            bot.reply_to(self.message, f"❌ Errore durante lo spawn: {e}")
         finally:
             session.close()
 
-    def handle_season_start(self):
-        # /season_start 1 "Stagione Saiyan"
+    def handle_spawn_random(self):
+        # !spawn_random
         try:
-            raw_text = self.message.text.replace("/season_start ", "")
-            parts = raw_text.split(" ", 1)
-            if len(parts) < 2:
-                bot.reply_to(self.message, "Usa: /season_start [numero] [nome]")
+            # Check active raid
+            session = Database().Session()
+            active_raid = session.query(ActiveRaid).filter_by(active=True, chat_id=Tecnologia_GRUPPO).first()
+            session.close()
+
+            if active_raid:
+                self.bot.reply_to(self.message, "⚠️ C'è già un Raid attivo nel gruppo!")
                 return
 
-            num = int(parts[0])
-            nome = parts[1].replace('"', '')
+            spawn_random_seasonal_boss()
+            self.bot.reply_to(self.message, "✅ Spawn casuale stagionale attivato!")
+        except Exception as e:
+            self.bot.reply_to(self.message, f"❌ Errore durante lo spawn casuale: {e}")
+
+    def handle_season_start(self):
+        # !season_start [numero] "[nome]" [giorni]
+        # Example: !season_start 1 "Saga di Pilaf" 30
+        try:
+            cmd = "!season_start" if "!" in self.message.text else "/season_start"
+            raw_text = self.message.text.replace(f"{cmd} ", "")
+            
+            # Using regex to properly catch quoted names
+            import re
+            match = re.search(r'(\d+)\s+"([^"]+)"(?:\s+(\d+))?', raw_text)
+            
+            if not match:
+                bot.reply_to(self.message, f"Usa: `{cmd} [numero] \"[nome]\" [giorni_durata]`\nEsempio: `!season_start 1 \"Saga di Pilaf\" 30`", parse_mode='Markdown')
+                return
+
+            num = int(match.group(1))
+            nome = match.group(2)
+            days = int(match.group(3)) if match.group(3) else None
 
             session = Database().Session()
             # Deactivate others
             session.query(Season).update({Season.active: False})
             
-            new_season = Season(numero=num, nome=nome, active=True, data_inizio=datetime.date.today())
+            new_season = Season(
+                numero=num, 
+                nome=nome, 
+                active=True, 
+                data_inizio=datetime.date.today()
+            )
+            if days:
+                new_season.data_fine = datetime.date.today() + datetime.timedelta(days=days)
+            
             session.add(new_season)
             session.commit()
-            bot.reply_to(self.message, f"✅ Stagione {num}: **{nome}** creata e attivata!", parse_mode='Markdown')
+            
+            msg = f"✅ **STAGIONE ATTIVATA** ✅\n\n📌 **{nome}** (Stagione {num})\n🆔 Database ID: `{new_season.id}`"
+            if days:
+                msg += f"\n📅 Scadenza: {new_season.data_fine} ({days} giorni)"
+            
+            msg += f"\n\n💡 I boss con `season_id={new_season.id}` verranno spawnati prioritariamente. Se vuoi usare i boss attuali (ID 1), assicurati di creare la Stagione con ID 1 o aggiorna i boss nel DB."
+            
+            bot.reply_to(self.message, msg, parse_mode='Markdown')
             session.close()
         except Exception as e:
-            bot.reply_to(self.message, f"❌ Errore: {e}")
+            bot.reply_to(self.message, f"❌ Errore durante l'avvio: {e}")
 
     def handle_season_addtier(self):
         # /season_addtier [season_id] [lvl] [xp] [free_rew] [prem_rew]
@@ -283,6 +342,68 @@ class BotCommands:
         except Exception as e:
              bot.reply_to(self.message, f"❌ Errore: {e}")
 
+    def handle_season_list(self):
+        session = Database().Session()
+        try:
+            seasons = session.query(Season).all()
+            if not seasons:
+                self.bot.reply_to(self.message, "📭 Nessuna stagione configurata.")
+                return
+
+            msg = "🏆 **LISTA STAGIONI** 🏆\n\n"
+            for s in seasons:
+                status = "✅ ATTIVA" if s.active else "❌ Inattiva"
+                msg += f"🆔 `{s.id}` | {status}\n📌 **{s.nome}** (Stagione {s.numero})\n"
+                msg += f"📅 Inizio: {s.data_inizio}\n\n"
+
+            msg += "Usa `!season_set [ID]` per attivarne una."
+            self.bot.reply_to(self.message, msg, parse_mode='Markdown')
+        except Exception as e:
+            self.bot.reply_to(self.message, f"❌ Errore: {e}")
+        finally:
+            session.close()
+
+    def handle_season_set(self):
+        # !season_set [id] [days]
+        try:
+            parts = self.message.text.split()
+            if len(parts) < 2:
+                self.bot.reply_to(self.message, "Usa: `!season_set [ID] [giorni_durata]`")
+                return
+
+            target_id = int(parts[1])
+            days = int(parts[2]) if len(parts) > 2 else None
+            
+            session = Database().Session()
+            
+            # 1. Deactivate all
+            session.query(Season).update({Season.active: False})
+            
+            # 2. Activate target
+            target = session.query(Season).filter_by(id=target_id).first()
+            if not target:
+                self.bot.reply_to(self.message, f"❌ Stagione ID {target_id} non trovata.")
+                session.close()
+                return
+
+            target.active = True
+            target.data_inizio = datetime.date.today()
+            if days:
+                target.data_fine = datetime.date.today() + datetime.timedelta(days=days)
+            else:
+                target.data_fine = None
+
+            session.commit()
+            
+            msg = f"✅ Stagione **{target.nome}** (ID: {target_id}) attivata correttamente!"
+            if days:
+                msg += f"\n📅 Durata: {days} giorni (Termina il {target.data_fine})"
+            
+            self.bot.reply_to(self.message, msg, parse_mode='Markdown')
+            session.close()
+        except Exception as e:
+            self.bot.reply_to(self.message, f"❌ Errore: {e}")
+
     def handle_set_boss_img(self):
         # Usage: Reply to an image with /set_boss_img [boss_id]
         if not self.message.reply_to_message or not self.message.reply_to_message.photo:
@@ -307,6 +428,32 @@ class BotCommands:
                 bot.reply_to(self.message, "❌ Boss non trovato.")
         except Exception as e:
             bot.reply_to(self.message, f"❌ Errore: {e}")
+        finally:
+            session.close()
+
+    def handle_boss_list(self):
+        # !boss_list
+        session = Database().Session()
+        try:
+            active_season = session.query(Season).filter_by(active=True).first()
+            if not active_season:
+                self.bot.reply_to(self.message, "📭 Nessuna stagione attiva. Usa `!season_list` per attivarne una.")
+                return
+
+            bosses = session.query(BossTemplate).filter_by(season_id=active_season.id).all()
+            if not bosses:
+                self.bot.reply_to(self.message, f"🎴 Nessun boss trovato per la stagione {active_season.nome}.")
+                return
+
+            msg = f"👾 **BOSS DELLA STAGIONE: {active_season.nome}** 👾\n\n"
+            for b in bosses:
+                status_img = "🖼️" if b.image_url else "📝 (No Img)"
+                msg += f"🆔 `{b.id}` | {status_img} **{b.nome}**\n"
+            
+            msg += "\n💡 Per impostare un'immagine, rispondi a una foto con `/set_boss_img [ID]`"
+            self.bot.reply_to(self.message, msg, parse_mode='Markdown')
+        except Exception as e:
+            self.bot.reply_to(self.message, f"❌ Errore: {e}")
         finally:
             session.close()
 
@@ -344,6 +491,76 @@ class BotCommands:
             bot.reply_to(self.message, "⚠️ I primi 4 valori devono essere numeri!")
         except Exception as e:
             bot.reply_to(self.message, f"❌ Errore: {e}")
+
+    def handle_add_saga_boss(self):
+        # /add_saga_boss [HP] [ATK] [XP] [POINTS] [SAGA] [NOME...]
+        # Example: /add_saga_boss 1000 50 100 50 Pilaf Pilaf Robot
+        args = self.message.text.split()
+        if len(args) < 7:
+            bot.reply_to(self.message, "Usa: `/add_saga_boss [HP] [ATK] [XP] [POINTS] [SAGA] [NOME]`", parse_mode='Markdown')
+            return
+        
+        try:
+            hp = int(args[1])
+            atk = int(args[2])
+            xp = int(args[3])
+            points = int(args[4])
+            saga = args[5].replace("_", " ") 
+            nome = " ".join(args[6:])
+            
+            session = Database().Session()
+            new_boss = BossTemplate(
+                nome=nome,
+                hp_max=hp,
+                atk=atk,
+                xp_reward_total=xp,
+                points_reward_total=points,
+                saga=saga,
+                image_url=None
+            )
+            session.add(new_boss)
+            session.commit()
+            
+            bot.reply_to(self.message, f"✅ Boss **{nome}** aggiunto alla saga **{saga}** con ID: **{new_boss.id}**")
+            session.close()
+            
+        except ValueError:
+            bot.reply_to(self.message, "⚠️ I primi 4 valori devono essere numeri!")
+        except Exception as e:
+            bot.reply_to(self.message, f"❌ Errore: {e}")
+
+    def handle_saga(self):
+        try:
+            args = self.message.text.split()
+            session = Database().Session()
+            if len(args) == 1:
+                # List all distinct sagas
+                sagas = session.query(BossTemplate.saga).filter(BossTemplate.saga != None).distinct().all()
+                
+                msg = "📜 **SAGHE DISPONIBILI** 📜\n\n"
+                if sagas:
+                    for s in sagas:
+                        if s[0]: msg += f"🔹 {s[0]}\n"
+                    msg += "\nUsa `!saga [Nome]` per vedere i nemici di una saga specifica."
+                else:
+                    msg = "Nessuna saga trovata nel database."
+                self.bot.reply_to(self.message, msg, parse_mode='Markdown')
+            else:
+                # List bosses in specific saga
+                search = " ".join(args[1:]).strip()
+                bosses = session.query(BossTemplate).filter(BossTemplate.saga.ilike(f"%{search}%")).all()
+                if bosses:
+                    msg = f"🎴 **NEMICI: {search.upper()}** 🎴\n\n"
+                    for b in bosses:
+                        msg += f"🆔 `{b.id}` | 👾 **{b.nome}**\n❤️ Vita: {b.hp_max} | ⚔️ Atk: {b.atk}\n\n"
+                    msg += f"💡 Usa `/set_boss_img [ID]` (rispondendo a una foto) per impostarne l'immagine."
+                else:
+                    msg = f"Nessun nemico trovato per la saga: {search}"
+                self.bot.reply_to(self.message, msg, parse_mode='Markdown')
+            session.close()
+        except Exception as e:
+            print(f"Error in handle_saga: {e}")
+            self.bot.reply_to(self.message, f"❌ Errore durante la ricerca della saga: {e}")
 
     def handle_buy_potion(self):
         import datetime
@@ -420,7 +637,7 @@ class BotCommands:
             
             # Confirm
             msg = f"✅ Hai acquistato una {nome_oggetto}!\n"
-            msg += f"📦 È stata aggiunta al tuo inventario.\n"
+            msg += f"🎒 È stata aggiunta al tuo inventario.\n"
             msg += f"💰 Costo: {costo}\n"
             msg += f"📦 Scorte globali rimanenti: {daily_shop.pozioni_rimanenti}"
             
@@ -431,6 +648,85 @@ class BotCommands:
             session.rollback()
             print(f"Errore acquisto pozione: {e}")
             self.bot.reply_to(self.message, "Errore durante l'acquisto, contatta un admin.")
+        finally:
+            session.close()
+
+    def handle_buy_radar(self):
+        from model import DailyShop, Collezionabili
+        utente = Utente().getUtente(self.chatid)
+
+        session = Database().Session()
+        # Fetch the actual object (Radar Cercasfere) for current user
+        radar = session.query(Collezionabili).filter_by(id_telegram=str(self.chatid), oggetto="Radar Cercasfere", data_utilizzo=None).first()
+        
+        now = datetime.datetime.now()
+        oggi = datetime.date.today()
+        
+        try:
+            # --- 1. Personal Cooldown (24h) ---
+            if utente.last_radar_purchase:
+                diff = now - utente.last_radar_purchase
+                if diff.total_seconds() < 24 * 3600:
+                    hours_left = int(24 - (diff.total_seconds() / 3600))
+                    self.bot.reply_to(self.message, f"⏳ Sei in cooldown personale! Potrai acquistare di nuovo tra circa {hours_left} ore.")
+                    return
+
+            # --- 2. Determine Item Type ---
+            if not radar:
+                costo = 1500
+                full_name = "Radar Cercasfere"
+                charges_to_add = 5
+            else:
+                costo = 1000
+                full_name = "Cariche Radar"
+                charges_to_add = 10
+
+            # --- 3. Global Stock Check (2-Day Cycle / 48h) ---
+            # Get the LATEST entry for this specific item type
+            daily = session.query(DailyShop).filter_by(id_utente=0, tipo_pozione=full_name).order_by(DailyShop.data.desc()).first()
+            
+            # Restock logic: if none or older than 2 days (48h)
+            if not daily or (oggi - daily.data).days >= 2:
+                daily = DailyShop(id_utente=0, data=oggi, tipo_pozione=full_name, pozioni_rimanenti=10)
+                session.add(daily)
+                session.flush() # Persist to use ID
+
+            if daily.pozioni_rimanenti <= 0:
+                # Stock exhausted for current 48h window
+                days_since_start = (oggi - daily.data).days
+                days_left = 2 - days_since_start
+                self.bot.reply_to(self.message, f"⛔️ Le scorte globali di {full_name} sono esaurite!\nTorna tra circa {days_left} giorno/i per il rifornimento.")
+                return
+
+            # --- 4. Funds Check ---
+            if utente.points < costo:
+                self.bot.reply_to(self.message, f"❌ Non hai abbastanza {PointsName}! Ti servono {costo} fagioli.")
+                return
+
+            # --- 5. Finalize Purchase ---
+            Database().update_user(self.chatid, {
+                'points': utente.points - costo,
+                'last_radar_purchase': now
+            })
+            
+            if charges_to_add == 5:
+                # First purchase: item + 5 charges
+                Collezionabili().CreateCollezionabile(self.chatid, "Radar Cercasfere", 1, cariche=5)
+                msg = f"📟 **Radar Cercasfere** ottenuto con **5 cariche**!"
+            else:
+                # Refill: +10 charges to existing item
+                radar.cariche += 10
+                msg = f"🔋 **Ricarica Effettuata**! +10 cariche (Totale: {radar.cariche})."
+            
+            daily.pozioni_rimanenti -= 1
+            session.commit()
+            
+            final_msg = f"✅ {msg}\n💰 Costo: {costo} fagioli\n📦 Scorte globali rimanenti: {daily.pozioni_rimanenti}\n⏳ Prossimo acquisto disponibile tra 24 ore."
+            self.bot.reply_to(self.message, final_msg, parse_mode='Markdown', reply_markup=Database().negozioPozioniMarkup(self.chatid))
+
+        except Exception as e:
+            print(f"Errore gestione radar: {e}")
+            self.bot.reply_to(self.message, "Errore tecnico durante l'operazione.")
         finally:
             session.close()
 
@@ -501,7 +797,7 @@ class BotCommands:
 
     def handle_inventario(self):
         inventario = Collezionabili().getInventarioUtente(self.chatid)
-        msg = "📦 Inventario 📦\n\n"
+        msg = "🎒 Inventario 🎒\n\n"
         if inventario:
             for oggetto in inventario:
                 if oggetto.oggetto not in ['TNT']:
@@ -796,8 +1092,29 @@ class BotCommands:
             exp_to_lvl = int(parametri[3])
             link_img = parametri[4]
             saga = parametri[5]
-            lv_premium = parametri[6]
-            Livello().addLivello(livello,nome,exp_to_lvl,link_img,saga,lv_premium)
+            lv_premium = int(parametri[6])
+            skill_name = parametri[7] if len(parametri) > 7 else "Attacco Speciale"
+            multiplier = float(parametri[8]) if len(parametri) > 8 else 3.0
+            cost = int(parametri[9]) if len(parametri) > 9 else 60
+            
+            # Update Livello model call
+            exist = session.query(Livello).filter_by(livello=livello, lv_premium=lv_premium).first()
+            if exist is None:
+                new_lv = Livello(
+                    livello=livello, nome=nome, exp_to_lv=exp_to_lvl, 
+                    link_img=link_img, saga=saga, lv_premium=lv_premium,
+                    skill_name=skill_name, skill_multiplier=multiplier, skill_aura_cost=cost
+                )
+                session.add(new_lv)
+            else:
+                exist.nome = nome
+                exist.exp_to_lv = exp_to_lvl
+                exist.link_img = link_img
+                exist.saga = saga
+                exist.skill_name = skill_name
+                exist.skill_multiplier = multiplier
+                exist.skill_aura_cost = cost
+            session.commit()
 
     def handle_plus_minus(self):
         message = self.message
@@ -1182,7 +1499,7 @@ def handle_inline_buttons(call):
         markup = types.InlineKeyboardMarkup()
         for oggetto in inventario:
             # Only allow using certain items for now
-            if oggetto.oggetto in ['Nitro', 'Cassa', 'TNT'] or 'Pozione' in oggetto.oggetto:
+            if oggetto.oggetto in ['Nitro', 'Cassa', 'TNT', 'Radar Cercasfere'] or 'Pozione' in oggetto.oggetto:
                 markup.add(types.InlineKeyboardButton(f"🎁 Usa {oggetto.oggetto} ({int(oggetto.quantita)})", callback_data=f"use_item_{oggetto.oggetto}"))
         
         if len(markup.keyboard) == 0:
@@ -1221,12 +1538,61 @@ def handle_inline_buttons(call):
                 sti.close()
                 bot.send_message(chat_to_send, f"💣 Qualcuno ha piazzato una Cassa TNT dall'inventario! Scappate!")
                 Collezionabili().armaTrappola(chat_to_send, 'TNT', user_id)
+            elif item_name == 'Radar Cercasfere':
+                # Fetch full item to get charges
+                session = Database().Session()
+                radar = session.query(Collezionabili).filter_by(id_telegram=str(user_id), oggetto=item_name, data_utilizzo=None).first()
+                
+                if not radar:
+                    bot.answer_callback_query(call.id, "Oggetto non trovato.")
+                    session.close()
+                    return
+
+                if radar.cariche <= 0:
+                    bot.answer_callback_query(call.id, "Il Radar è scarico! Ricaricalo al negozio.")
+                    session.close()
+                    return
+
+                # Consume 1 charge
+                radar.cariche -= 1
+                cariche_rimanenti = radar.cariche
+                
+                # Roll for Success (60% chance)
+                found = random.randint(1, 100) <= 60
+                
+                if found:
+                    # Logic same as automatic radar: pick a sphere and set state
+                    try:
+                        with open('items.csv', 'r', encoding='latin-1') as f:
+                            lines = [l.strip() for l in f.readlines() if l.strip() and not l.startswith('nome,')]
+                            items_list = [l.split(',') for l in lines]
+                            spheres = [it[0] for it in items_list if it[0].startswith("La Sfera del Drago")]
+                            if spheres:
+                                target_sphere = random.choice(spheres)
+                                # The drop is still global, but the ALERT is private!
+                                Collezionabili.pending_radar_drop[Tecnologia_GRUPPO] = target_sphere
+                                # bot.send_message(Tecnologia_GRUPPO, ...) # BRO: Private only!
+                                bot.edit_message_text(f"📟 **Radar**: Segnale rilevato! Corri nel gruppo!\n🔋 Batterie residue: {cariche_rimanenti}", call.message.chat.id, call.message.message_id)
+                    except:
+                        bot.edit_message_text(f"📟 **Radar**: Errore durante la scansione.", call.message.chat.id, call.message.message_id)
+                else:
+                    bot.edit_message_text(f"📟 **Radar**: Nessun segnale rilevato in quest'area...\n🔋 Batterie residue: {cariche_rimanenti}", call.message.chat.id, call.message.message_id)
+
+                # Update or delete (REMOVED: Radar is permanent)
+                if radar.cariche <= 0:
+                    bot.send_message(user_id, "🪫 Il tuo Radar si è scaricato! Vai al negozio per ricaricarlo.")
+                
+                session.commit()
+                session.close()
+                bot.answer_callback_query(call.id, "Radar utilizzato!")
+                return
             elif 'La Sfera del Drago' in item_name:
                 bot.answer_callback_query(call.id, "Usa il comando 'Sfera' o evoca il Drago dall'inventario se le hai tutte!")
                 return
+
             elif 'Pozione' in item_name:
                 # Calculate Heal Amount
-                heal_amount = 0
+                percentage = 0
                 if 'Piccola' in item_name: percentage = 0.25
                 elif 'Media' in item_name: percentage = 0.50
                 elif 'Grande' in item_name: percentage = 0.75
@@ -1235,7 +1601,6 @@ def handle_inline_buttons(call):
                 if 'Aura' in item_name:
                     # Logic for Aura
                     MAX_AURA = 60 + (utente.stat_aura * 5)
-                    # Use persisted aura value or default to MAX if not set (though migration set it to 60)
                     current_aura = utente.aura if utente.aura is not None else MAX_AURA 
                     
                     if current_aura >= MAX_AURA:
@@ -1245,9 +1610,7 @@ def handle_inline_buttons(call):
                     heal_amount = int(MAX_AURA * percentage)
                     new_aura = min(MAX_AURA, current_aura + heal_amount)
                     Database().update_user(user_id, {'aura': new_aura})
-                    
                     msg_text = f"🧪 Hai bevuto {item_name}!\n💙 Aura ripristinata: {new_aura}/{MAX_AURA}"
-
                 else:
                     # Logic for Health (Default/Rigenerante)
                     MAX_VITA = 50 + (utente.stat_vita * 10)
@@ -1267,9 +1630,8 @@ def handle_inline_buttons(call):
                 bot.answer_callback_query(call.id, "Slurp!")
                 return
             
-            # Consuma l'oggetto
+            # Consuma l'oggetto (Solo per oggetti di gruppo che arrivano qui)
             Collezionabili().usaOggetto(user_id, item_name)
-            
             bot.edit_message_text(f"Hai usato {item_name}! L'effetto è stato attivato nel gruppo.", call.message.chat.id, call.message.message_id)
             bot.answer_callback_query(call.id, f"{item_name} usato!")
             
@@ -1446,12 +1808,18 @@ def handle_inline_buttons(call):
             stat_aura = utente_live.stat_aura or 0
             stat_crit = utente_live.stat_crit_rate or 0
             
+            # Fetch Skill info from selected level
+            selected_lv = session.query(Livello).filter_by(id=utente_live.livello_selezionato).first()
+            
+            skill_name = selected_lv.skill_name if selected_lv else "Attacco Speciale"
+            multiplier = selected_lv.skill_multiplier if selected_lv else 3.0
+            costo_aura = selected_lv.skill_aura_cost if selected_lv else 60
+            
             dmg_base = max(1, stat_danno * 2) # Base dmg calc
             attack_name = "Attacco"
             crit = False
             
             if mode == "spc":
-                costo_aura = 60
                 current_aura = utente_live.aura if utente_live.aura is not None else (60 + stat_aura * 5)
                 if current_aura < costo_aura:
                     bot.answer_callback_query(call.id, f"❌ Aura insufficiente! Serve {costo_aura}.")
@@ -1460,10 +1828,10 @@ def handle_inline_buttons(call):
                 utente_live.aura = (utente_live.aura if utente_live.aura is not None else (60 + stat_aura * 5)) - costo_aura
                 
                 # Special Multiplier scales with Aura stat
-                # Base is 3x, increases by 0.05 for each point in stat_aura
-                aura_multiplier = 3 + (stat_aura * 0.05)
+                # Base is character multiplier, increases by 0.05 for each point in stat_aura
+                aura_multiplier = multiplier + (stat_aura * 0.05)
                 dmg_base *= aura_multiplier
-                attack_name = "Attacco Speciale"
+                attack_name = skill_name
 
             # Crit Check
             crit_chance = stat_crit # e.g. 50 = 50%
@@ -1487,36 +1855,44 @@ def handle_inline_buttons(call):
                 utente_live.vita = max(0, utente_live.vita - boss_dmg)
                 log_msg += f"\n⚠️ Il Boss ha contrattaccato! -{boss_dmg} HP a {utente_live.nome}"
             
-            bot.answer_callback_query(call.id, f"Hai inflitto {final_dmg} danni!")
-            
-            # 5. Check Death
+            # 5. Check Death & Loot
+            is_boss_dead = False
             if raid.hp_current <= 0:
+                is_boss_dead = True
                 raid.active = False
                 raid.hp_current = 0
                 
-                # Loot Distribution
                 total_raid_dmg = sum(p.dmg_total for p in session.query(RaidParticipant).filter_by(raid_id=raid.id).all())
-                
                 loot_msg = f"💀 **{boss.nome} è stato SCONFITTO!** 💀\n\n💰 Ricompense:\n"
                 
-                # Distribute
                 participants = session.query(RaidParticipant).filter_by(raid_id=raid.id).all()
                 for p in participants:
                     share = p.dmg_total / total_raid_dmg if total_raid_dmg > 0 else 0
                     xp_gain = int(boss.xp_reward_total * share)
                     pts_gain = int(boss.points_reward_total * share)
                     
-                    # Fetching user within SAME session to avoid locks
                     p_user = session.query(Utente).filter_by(id_telegram=p.user_id).first()
                     if p_user:
                         p_user.exp += xp_gain
                         p_user.points += pts_gain
                         loot_msg += f"👤 {p_user.nome}: {p.dmg_total} dmg -> {xp_gain} XP, {pts_gain} {PointsName}\n"
+                        
+                        active_season = session.query(Season).filter_by(active=True).first()
+                        if active_season:
+                            prog = session.query(UserSeasonProgress).filter_by(user_id=p.user_id, season_id=active_season.id).first()
+                            if not prog:
+                                prog = UserSeasonProgress(user_id=p.user_id, season_id=active_season.id, season_exp=0, season_level=1)
+                                session.add(prog)
+                                session.flush()
+                            prog.season_exp += xp_gain
                 
                 bot.send_message(raid.chat_id, loot_msg)
+
+            # Persist changes BEFORE updating UI
+            session.commit()
+            bot.answer_callback_query(call.id, f"Hai inflitto {final_dmg} danni!")
                 
             # 6. Update UI
-            # Health Bar
             blocks = 10
             filled = int(round(blocks * raid.hp_current / raid.hp_max))
             bar = "🟥" * filled + "⬜️" * (blocks - filled)
@@ -1525,20 +1901,29 @@ def handle_inline_buttons(call):
             msg_text += f"❤️ Vita: [{bar}] {raid.hp_current}/{raid.hp_max}\n"
             msg_text += f"\n📜 **Ultima Azione**:\n{log_msg}"
             
-            if raid.active:
-                markup = types.InlineKeyboardMarkup()
-                markup.row(
-                    types.InlineKeyboardButton("⚔️ Attacca", callback_data=f"raid_atk_{raid.id}"),
-                    types.InlineKeyboardButton("✨ Attacco Speciale (60 Aura)", callback_data=f"raid_spc_{raid.id}")
-                )
-                bot.edit_message_caption(chat_id=raid.chat_id, message_id=raid.message_id, caption=msg_text, parse_mode='Markdown', reply_markup=markup)
-            else:
-                 bot.edit_message_caption(chat_id=raid.chat_id, message_id=raid.message_id, caption=msg_text + "\n\n❌ **SCONFITTO**", parse_mode='Markdown')
-
-            session.commit()
+            try:
+                if not is_boss_dead:
+                    markup = types.InlineKeyboardMarkup()
+                    markup.row(
+                        types.InlineKeyboardButton("⚔️ Attacca", callback_data=f"raid_atk_{raid.id}"),
+                        types.InlineKeyboardButton("✨ Attacco Speciale", callback_data=f"raid_spc_{raid.id}")
+                    )
+                    
+                    if boss.image_url:
+                        bot.edit_message_caption(chat_id=raid.chat_id, message_id=raid.message_id, caption=msg_text, parse_mode='Markdown', reply_markup=markup)
+                    else:
+                        bot.edit_message_text(chat_id=raid.chat_id, message_id=raid.message_id, text=msg_text, parse_mode='Markdown', reply_markup=markup)
+                else:
+                    final_caption = msg_text + "\n\n❌ **SCONFITTO**"
+                    if boss.image_url:
+                        bot.edit_message_caption(chat_id=raid.chat_id, message_id=raid.message_id, caption=final_caption, parse_mode='Markdown')
+                    else:
+                        bot.edit_message_text(chat_id=raid.chat_id, message_id=raid.message_id, text=final_caption, parse_mode='Markdown')
+            except Exception as e_tg:
+                print(f"Telegram Edit Error: {e_tg}")
 
         except Exception as e:
-            print(f"Error in raid: {e}")
+            print(f"Error in raid action: {e}")
             bot.answer_callback_query(call.id, "Errore generico raid")
         finally:
             session.close()
@@ -1549,19 +1934,24 @@ def spawn_random_seasonal_boss():
     try:
         # 1. Get Active Season
         active_season = session.query(Season).filter_by(active=True).first()
-        if not active_season:
-            print("No active season found for auto-spawn.")
-            return
-
-        # 2. Find eligible bosses (matching season_id)
-        bosses = session.query(BossTemplate).filter_by(season_id=active_season.id).all()
         
+        bosses = []
+        if active_season:
+            # Find eligible bosses (matching season_id)
+            bosses = session.query(BossTemplate).filter_by(season_id=active_season.id).all()
+        else:
+            print("No active season found. Using general/fallback pool.")
+
         if not bosses:
-            # Fallback to general bosses (e.g. season_id=1)
+            # Fallback 1: Default Season (ID=1)
             bosses = session.query(BossTemplate).filter_by(season_id=1).all()
             
         if not bosses:
-            print("No bosses available for spawn.")
+            # Fallback 2: Any available boss
+            bosses = session.query(BossTemplate).all()
+
+        if not bosses:
+            print("No bosses available in database.")
             return
 
         boss = random.choice(bosses)
@@ -1607,6 +1997,59 @@ def spawn_random_seasonal_boss():
 
     except Exception as e:
         print(f"Error in auto-spawn: {e}")
+    finally:
+        session.close()
+
+def process_season_end(season):
+    """Calculates top players and announces end of season."""
+    session = Database().Session()
+    try:
+        # 1. Fetch Top 3
+        top_players = session.query(UserSeasonProgress).filter_by(season_id=season.id).order_by(UserSeasonProgress.season_exp.desc()).limit(3).all()
+        
+        msg = f"🏆 **FINE STAGIONE: {season.nome}** 🏆\n\n"
+        msg += "Il tempo è scaduto! Ecco i guerrieri più valorosi di questa stagione che ricevono i premi automatici:\n\n"
+        
+        medals = ["🥇", "🥈", "🥉"]
+        rewards = [5000, 2500, 1000] # Standard rewards
+        
+        for i, prog in enumerate(top_players):
+            user = session.query(Utente).filter_by(id_telegram=prog.user_id).first()
+            if user:
+                premio = rewards[i] if i < len(rewards) else 0
+                user.points += premio
+                msg += f"{medals[i]} **{user.nome}** - {prog.season_exp} XP (+{premio} {PointsName})\n"
+            else:
+                msg += f"{medals[i]} **Guerriero {prog.user_id}** - {prog.season_exp} XP\n"
+        
+        if not top_players:
+            msg += "Nessun gurreiro ha partecipato a questa stagione... che peccato!\n"
+            
+        msg += "\n🎉 Complimenti ai vincitori! I premi sono stati accreditati automaticamente sui vostri account."
+        msg += "\n\nLa stagione è ora **CHIUSA**. Restate sintonizzati per la prossima!"
+        
+        bot.send_message(Tecnologia_GRUPPO, msg, parse_mode='Markdown')
+        
+        # 2. Deactivate
+        season.active = False
+        session.add(season)
+        session.commit()
+    except Exception as e:
+        print(f"Error processing season end: {e}")
+    finally:
+        session.close()
+
+def check_season_expiry():
+    """Checks if the active season has reached its end date."""
+    session = Database().Session()
+    try:
+        active_season = session.query(Season).filter_by(active=True).first()
+        if active_season and active_season.data_fine:
+            if datetime.date.today() >= active_season.data_fine:
+                print(f"Season {active_season.id} expired. Ending it...")
+                process_season_end(active_season)
+    except Exception as e:
+        print(f"Error checking season expiry: {e}")
     finally:
         session.close()
 

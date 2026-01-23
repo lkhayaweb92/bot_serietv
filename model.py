@@ -42,7 +42,7 @@ class Database:
         #markup.add('Compra 1 gioco')
         #markup.add('Cosa puoi fare con i Frutti Wumpa?')
         #markup.add('Come guadagno Frutti Wumpa?')
-        markup.add('ℹ️ info','🎮 Nome in Game','📦 Inventario','🧪 Negozio Pozioni')
+        markup.add('ℹ️ info','🎮 Nome in Game','🎒 Inventario','🛒 Negozio')
         if utente is not None:
             if utente.premium==1:
                 markup.add('👤 Scegli il personaggio','👤 Scegli il personaggio 🎖')
@@ -66,22 +66,54 @@ class Database:
             '🧪 Pozione Rigenerante Piccola', '🧪 Pozione Rigenerante Media',
             '🧪 Pozione Rigenerante Grande', '🧪 Pozione Rigenerante Enorme',
             '🧪 Pozione Aura Piccola', '🧪 Pozione Aura Media',
-            '🧪 Pozione Aura Grande', '🧪 Pozione Aura Enorme'
+            '🧪 Pozione Aura Grande', '🧪 Pozione Aura Enorme',
         ]
 
-        if user_id: # user_id is passed but we check GLOBAL stock (id=0)
+        if user_id: 
+            # 1. Check Personal Cooldown (12h)
+            from model import Utente
+            utente = Utente().getUtente(user_id)
+            import datetime
+            now = datetime.datetime.now()
+            
+            show_radar = True
+            if utente and utente.last_radar_purchase:
+                diff = now - utente.last_radar_purchase
+                if diff.total_seconds() < 24 * 3600:
+                    show_radar = False
+            
+            # 2. Add Button if not in cooldown
+            if show_radar:
+                radar = Collezionabili().getItemByUser(user_id, 'Radar Cercasfere')
+                if radar:
+                    all_potions.append('🔋 Cariche Radar')
+                else:
+                    all_potions.append('📟 Radar Cercasfere')
+
             import datetime
             session = self.Session()
             oggi = datetime.date.today()
-            # Fetch all daily records for GLOBAL STOCK (id_utente=0) today
-            shops = session.query(DailyShop).filter_by(id_utente=0, data=oggi).all()
-            session.close()
-
-            # Create a set of exhausted "clean" potion names
-            exhausted = {s.tipo_pozione for s in shops if s.pozioni_rimanenti <= 0}
             
-            # Filter available potions (compare stripped name with DB name)
-            available_potions = [p for p in all_potions if p.replace("🧪 ", "") not in exhausted]
+            # 1. Potion Stock (Daily)
+            shops_daily = session.query(DailyShop).filter_by(id_utente=0, data=oggi).all()
+            exhausted = {s.tipo_pozione for s in shops_daily if s.pozioni_rimanenti <= 0}
+            
+            # 2. Radar Stock (2-Day Cycle)
+            for r_type in ["Radar Cercasfere", "Cariche Radar"]:
+                latest_r = session.query(DailyShop).filter_by(id_utente=0, tipo_pozione=r_type).order_by(DailyShop.data.desc()).first()
+                if latest_r:
+                    # If within 2 days and exhausted
+                    if (oggi - latest_r.data).days < 2 and latest_r.pozioni_rimanenti <= 0:
+                        exhausted.add(r_type)
+
+            session.close()
+            
+            # Filter available potions
+            available_potions = []
+            for p in all_potions:
+                clean_name = p.replace("🧪 ", "").replace("📟 ", "").replace("🔋 ", "")
+                if clean_name not in exhausted:
+                    available_potions.append(p)
         else:
             available_potions = all_potions
 
@@ -273,6 +305,7 @@ class Utente(Base):
     end_tnt = Column('end_tnt',DateTime)
     scadenza_premium = Column('scadenza_premium',DateTime)
     abbonamento_attivo =  Column('abbonamento_attivo',Integer)
+    last_radar_purchase = Column('last_radar_purchase', DateTime) # For 12h cooldown
     
     # New Stats
     stat_vita = Column('stat_vita', Integer, default=0)
@@ -430,6 +463,15 @@ class Utente(Base):
         if selectedLevel:
             answer += f"*🎖 Lv. *{utente.livello} [{selectedLevel.nome}]({selectedLevel.link_img})\n"
             answer += f"*👥 Saga: *{selectedLevel.saga}\n"
+            
+            # Display Skill
+            skill_name = selectedLevel.skill_name or "Attacco Speciale"
+            multiplier = selectedLevel.skill_multiplier or 3.0
+            cost = selectedLevel.skill_aura_cost or 60
+            skill_dmg = int((utente.stat_danno or 0) * 2 * multiplier) # Estimated base damage
+            
+            answer += f"\n✨ **Abilità**:\n"
+            answer += f"🟣 {skill_name}: {skill_dmg} DMG, {cost} Aura\n"
         else:
             answer += f"*🎖 Lv. *{utente.livello}\n"
 
@@ -622,6 +664,9 @@ class Livello(Base):
     link_img = Column('link_img',String(128))
     saga = Column('saga',String(128))
     lv_premium = Column('lv_premium',Integer)
+    skill_name = Column(String(64), default="Attacco Speciale")
+    skill_multiplier = Column(Float, default=3.0)
+    skill_aura_cost = Column(Integer, default=60)
 
     def getLvByExp(self, exp):
         lv = 0
@@ -892,16 +937,20 @@ class Abbonamento:
 
 class Collezionabili(Base):
     __tablename__ = "collezionabili"
+    
+    # Global state for Dragon Radar events
+    pending_radar_drop = {} # {chat_id: sphere_name}
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     id_telegram = Column(String, nullable=False)
     oggetto = Column(String, nullable=False)
     data_acquisizione = Column(DateTime, nullable=False)
     quantita = Column(Integer, nullable=False)
+    cariche = Column(Integer, default=0) # New column for Radar
     data_utilizzo = Column(DateTime, nullable=True)
 
 
-    def CreateCollezionabile(self,id_telegram,item, quantita=1):
+    def CreateCollezionabile(self,id_telegram,item, quantita=1, cariche=0):
         session = Database().Session()
         try:
             collezionabile = Collezionabili()
@@ -909,6 +958,7 @@ class Collezionabili(Base):
             collezionabile.oggetto             = item
             collezionabile.data_acquisizione   = datetime.datetime.today()
             collezionabile.quantita            = quantita
+            collezionabile.cariche             = cariche
             collezionabile.data_utilizzo       = None
             print(collezionabile.id_telegram)
             session.add(collezionabile)
@@ -1024,7 +1074,7 @@ class Collezionabili(Base):
     def maybeDrop(self,message):
         if message.chat.type == "group" or message.chat.type == "supergroup":   
             id_telegram = message.from_user.id
-            items = pd.read_csv('items.csv')
+            items = pd.read_csv('items.csv', encoding='latin-1')
             indice_oggetto = random.randint(0,len(items)-1)
             tento_oggetto = items.iloc[indice_oggetto]
             oggetto = self.getItemByUser(id_telegram,tento_oggetto['nome'])
@@ -1046,11 +1096,36 @@ class Collezionabili(Base):
     """
     def maybeDrop(self, message):
         if message.chat.type == "group" or message.chat.type == "supergroup":
+            chat_id = message.chat.id
             id_telegram = message.from_user.id
+            
+            # --- 1. Check for Pending Radar Drop ---
+            if chat_id in Collezionabili.pending_radar_drop:
+                sphere_name = Collezionabili.pending_radar_drop.pop(chat_id)
+                try:
+                    with open('items.csv', 'r', encoding='latin-1') as f:
+                        lines = [l.strip() for l in f.readlines() if l.strip() and not l.startswith('nome,')]
+                        for l in lines:
+                            parts = l.split(',')
+                            if parts[0] == sphere_name:
+                                sticker = parts[4].strip()
+                                # Drop it!
+                                self.CreateCollezionabile(id_telegram, sphere_name, 1)
+                                try:
+                                    bot.send_sticker(chat_id, open(f"Stickers/{sticker}", 'rb'))
+                                    bot.send_message(chat_id, f"📡 **Radar Cercasfere**: Il segnale era corretto! Hai trovato una Sfera del Drago!")
+                                except: pass
+                                return True
+                except: pass
+
+            # --- 2. Radar Trigger Chance (REMOVED: Now manual item) ---
+            # Random automatic radar is disabled.
+
+            # --- 3. Normal Drop Logic ---
             try:
-                with open('items.csv', 'r', encoding='utf-8') as f:
+                with open('items.csv', 'r', encoding='latin-1') as f:
                     lines = [line.strip() for line in f.readlines() if line.strip()]
-                    # Skip header if present (assuming first line is header 'nome,rarita...')
+                    # Skip header if present
                     if lines and lines[0].startswith('nome,'):
                         lines = lines[1:]
                     
@@ -1075,9 +1150,8 @@ class Collezionabili(Base):
                 tento_oggetto['rarita'] = int(obj[1])
                 tento_oggetto['massimo_numero_per_drop'] = int(obj[2])
                 tento_oggetto['max_per_persona'] = int(obj[3])
-                tento_oggetto['sticker'] = obj[4].strip() # Remove any remaining whitespace
+                tento_oggetto['sticker'] = obj[4].strip() 
             except ValueError:
-                # Handle cases where integer conversion fails
                 return False
 
             oggetto = self.getItemByUser(id_telegram, tento_oggetto['nome'])
@@ -1085,25 +1159,27 @@ class Collezionabili(Base):
             
             if oggetto:
                 if oggetto.oggetto == tento_oggetto['nome']:
-                    # Logic: if user already has max items, don't drop
                     if oggetto.quantita >= tento_oggetto['max_per_persona']:
                         return False
                     
-                    # Prevent going over max
                     if oggetto.quantita + quantita > tento_oggetto['max_per_persona']:
                         quantita = tento_oggetto['max_per_persona'] - oggetto.quantita
 
             culo = random.randint(1, tento_oggetto['rarita'])
             if culo == tento_oggetto['rarita']:
                 try:
+                    ch = 10 if 'Radar' in tento_oggetto['nome'] else 0
+                    self.CreateCollezionabile(id_telegram, tento_oggetto['nome'], quantita, cariche=ch)
+                    
                     sti = open(f"Stickers/{tento_oggetto['sticker']}", 'rb')
                     bot.send_sticker(message.chat.id, sti)
-                    sti.close() # Close the file
+                    sti.close() 
                     self.triggerDrop(message, tento_oggetto, quantita)
                     return True
                 except FileNotFoundError:
                     print(f"Sticker not found: Stickers/{tento_oggetto['sticker']}")
                     return False
+            
             return False
 
                     
@@ -1140,7 +1216,7 @@ class Collezionabili(Base):
             self.nitroExploded(utente,message)
         elif oggetto['nome']=='Cassa':
             self.cassaWumpa(utente,message)
-        elif 'La sfera del Drago' in oggetto['nome']:
+        elif 'La Sfera del Drago' in oggetto['nome']:
             drago(utente,message)
         else:
             self.CreateCollezionabile(id_telegram,oggetto['nome'],quantita)
@@ -1245,6 +1321,7 @@ class BossTemplate(Base):
     xp_reward_total = Column(Integer)
     points_reward_total = Column(Integer)
     season_id = Column(Integer, default=1) # Linked to Season
+    saga = Column(String) # Linked to a specific saga (e.g. "Saga di Pilaf")
 
 class ActiveRaid(Base):
     __tablename__ = 'active_raid'
