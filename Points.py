@@ -3,7 +3,7 @@ from sqlalchemy         import create_engine, false, null, true
 from sqlalchemy         import update
 from sqlalchemy         import desc,asc
 from sqlalchemy.orm     import sessionmaker
-from model import Utente,Domenica,Admin,Livello,Database,Abbonamento,Collezionabili, create_table
+from model import Utente,Domenica,Admin,Livello,Database,Abbonamento,Collezionabili, create_table, spawn_random_seasonal_boss
 import datetime
 from settings import *
 import datetime
@@ -155,6 +155,10 @@ class Points:
                     utente.addRandomExp(utenteSorgente,message)
                     #utente.checkCasse(utenteSorgente,message)
                     Collezionabili().maybeDrop(message)
+                    
+                    # --- BOSS SPAWN CHANCE (15%) ---
+                    if random.randint(1, 100) <= 15:
+                        spawn_random_seasonal_boss(only_boss=False)
         elif message.chat.type == 'private':
             chatid = message.chat.id
             # Membership Check for Private Chat
@@ -175,21 +179,6 @@ class Points:
 
         return utenteSorgente,chatid
 
-    def album(self):
-        answer = ''
-        answer += 'Inoltrami un gioco dagli album per acquistarlo.'+'\n\n'
-        answer += '1️⃣ [PS1](t.me/): Costa 15 '+PointsName+' per gioco'+'\n'
-        answer += '2️⃣ [PS2](t.me/): Costa 15 '+PointsName+' per gioco'+'\n'
-        answer += '3️⃣ [PS3](t.me/) Costa 15 '+PointsName+' per gioco'+'\n'
-        answer += '4️⃣ [PS4](t.me/) Costa 15 '+PointsName+' per gioco'+'\n'
-        answer += '📲 [PSP](t.me/) Costa 15 '+PointsName+' per gioco'+'\n'
-        answer += '💻 [PC](https://t.me/) Costa 15 '+PointsName+' per gioco'+'\n'
-        answer += '🐶 [Nintendo](t.me/) Costa 15 '+PointsName+' per gioco'+'\n'
-        answer += '📽 [Cinema](t.me/) Costa 5 '+PointsName+' per film'+'\n'
-        answer += '🎖 [Premium](t.me/) Costa 0 '+PointsName+', canale esclusivo agli utenti Premium.'+'\n\n'
-        answer += '[Come guadagnare Frutti Wumpa?](https://t.me/)'+'\n'
-        answer += '[Cosa puoi fare con i Frutti Wumpa?](https://t.me/)'
-        return answer
 
     def welcome(self,message):
         chatid = message.chat.id if message.chat.type == 'private' else message.from_user.id
@@ -198,7 +187,6 @@ class Points:
         if message.chat.type == 'private' and not self.isMember(chatid):
             return # checkBeforeAll handles the message
 
-        bot.reply_to(message,self.album(),parse_mode='markdown')
         Utente.checkUtente(Utente,message)
         
         # Check if user is "new" (Stats at default values)
@@ -220,10 +208,16 @@ class Points:
             return "Solo gli amministratori possono aggiungere o rimuovere punti"
 
         # Split del comando in parti, separando l'operazione (+ o -) dai nomi degli utenti
-        parts       = message.text.split()
-        op          = parts[0][0]
-        points      = parts[0][1:]
-        points = int(points) if op == '+' else -int(points)
+        if not parts: return "Comando vuoto"
+        
+        token = parts[0]
+        op = token[0]
+        points_str = token[1:]
+        
+        if op not in ['+', '-'] or not points_str.isdigit():
+            return "⚠️ Formato errato. Usa: `+100 @utente` o `-50 @utente`"
+            
+        points = int(points_str) if op == '+' else -int(points_str)
         usernames = [username for username in parts[1:] if username.startswith('@')]
         # Verifica che il comando sia ben formato
         answer = ''

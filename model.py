@@ -39,10 +39,7 @@ class Database:
     def startMarkup(self,utente=None):
         markup = types.ReplyKeyboardMarkup()
 
-        #markup.add('Compra 1 gioco')
-        #markup.add('Cosa puoi fare con i Frutti Wumpa?')
-        #markup.add('Come guadagno Frutti Wumpa?')
-        markup.add('ℹ️ info','🎮 Nome in Game','🎒 Inventario','🛒 Negozio')
+        markup.add('ℹ️ info','🎒 Inventario','🛒 Negozio')
         if utente is not None:
             if utente.premium==1:
                 markup.add('👤 Scegli il personaggio','👤 Scegli il personaggio 🎖')
@@ -179,8 +176,6 @@ class Database:
     def update_livello(self, id, kwargs):
         self.update_table_entry(Livello, "id", id, kwargs) 
     
-    def update_gameuser(self, chatid, kwargs):
-        self.update_table_entry(GiocoUtente, "id_telegram", chatid, kwargs) 
 
     def delete_user_complete(self, chatid):
         session = self.Session()
@@ -189,8 +184,6 @@ class Database:
             session.query(Utente).filter_by(id_telegram=chatid).delete()
             # Delete from Collezionabili (inventory)
             session.query(Collezionabili).filter_by(id_telegram=str(chatid)).delete()
-            # Delete from GiocoUtente (games)
-            session.query(GiocoUtente).filter_by(id_telegram=chatid).delete()
             # Delete from Domenica (bonus)
             session.query(Domenica).filter_by(utente=chatid).delete()
             
@@ -246,47 +239,6 @@ class Database:
 def create_table(engine):
     Base.metadata.create_all(engine)
 
-class GiocoUtente(Base):
-    __tablename__ = "giocoutente"
-    id = Column(Integer, primary_key=True)
-    id_telegram = Column('id_Telegram', Integer)
-    piattaforma = Column('piattaforma', String)
-    nome        = Column('nome', String)
-
-    def CreateGiocoUtente(self,id_telegram,piattaforma,nomegioco):
-        session = Database().Session()
-        exist = session.query(GiocoUtente).filter_by(id_telegram = id_telegram,piattaforma=piattaforma).first()
-        if exist is None:
-            try:
-                giocoutente = GiocoUtente()
-                giocoutente.id_telegram     = id_telegram
-                giocoutente.piattaforma     = piattaforma
-                giocoutente.nome            = nomegioco
-                session.add(giocoutente)
-                session.commit()
-            except:
-                session.rollback()
-                raise
-            finally:
-                session.close()
-            return False
-        else:
-            Database().update_gameuser(id_telegram,{'piattaforma':piattaforma,'gioco':nomegioco})
-        return True
-
-    def getGiochiUtente(self, id_telegram):
-        session = Database().Session()
-        giochiutente = session.query(GiocoUtente).filter_by(id_telegram=id_telegram).all()
-        session.close()
-        return giochiutente
-
-    def delPiattaformaUtente(self,id_telegram,piattaforma,nome):
-        session = Database().Session()
-        giocoutente = session.query(GiocoUtente).filter_by(id_telegram=id_telegram,piattaforma=piattaforma,nome=nome).first()
-        print(giocoutente.id_telegram,giocoutente.piattaforma,giocoutente.nome)
-        session.delete(giocoutente)
-        session.commit()
-        session.close()      
 
 class Utente(Base):
     __tablename__ = "utente"
@@ -317,6 +269,10 @@ class Utente(Base):
     
     # New Current Aura
     aura = Column('aura', Integer, default=60)
+    
+    # Character Growth System
+    stadio_crescita = Column('stadio_crescita', String, default='bambino')
+    data_crescita = Column('data_crescita', DateTime)
 
     def CreateUser(self,id_telegram,username,name,last_name):
 
@@ -340,6 +296,7 @@ class Utente(Base):
                 utente.end_tnt = datetime.datetime.now()
                 utente.scadenza_premium = datetime.datetime.now()
                 utente.abbonamento_attivo = 0
+                utente.stadio_crescita = 'bambino'
                 session.add(utente)
                 session.commit()
             except:
@@ -366,6 +323,41 @@ class Utente(Base):
 
         session.close()
         return utente
+
+    def verifica_crescita(self):
+        """Checks if the character meets growth milestones."""
+        if self.stadio_crescita == 'adulto':
+            return False, "Sei già adulto!"
+        
+        # Conditions: LV 15 for Premium, 20 for Normal
+        min_lv = 15 if self.premium == 1 else 20
+        
+        if self.livello >= min_lv:
+            return True, "Puoi crescere!"
+        else:
+            return False, f"Ti serve il livello {min_lv} per diventare adulto."
+
+    def applica_crescita(self, session):
+        """Applies growth bonuses and status."""
+        if self.stadio_crescita == 'adulto':
+            return False
+            
+        self.stadio_crescita = 'adulto'
+        self.data_crescita = datetime.datetime.now()
+        
+        # Apply One-Time Growth Bonuses (Permanent)
+        # Note: We update base stats (or equivalents) directly on the object.
+        # These will be factored into calculate stats via infoUser formulas eventually.
+        # For now, let's just push them to the user record.
+        
+        # +100 Max HP (conceptually) -> We'll add it to stat_vita equivalents in calculations
+        # But wait, existing system uses stat_vita * 10. 
+        # Let's just grant a block of stats.
+        self.stat_vita += 10 # +100 HP
+        self.stat_aura += 5  # +25 Aura
+        self.stat_danno += 2 # +4 DMG
+        
+        return True
     
     def checkUtente(self, message):
         if message.chat.type == "group" or message.chat.type == "supergroup":
@@ -414,7 +406,6 @@ class Utente(Base):
             
         infoLv = Livello().infoLivello(utente.livello)
         selectedLevel = Livello().infoLivelloByID(utente.livello_selezionato)
-        giochiutente = GiocoUtente().getGiochiUtente(utente.id_telegram)
         
         # New: get Rank
         import Points
@@ -423,6 +414,11 @@ class Utente(Base):
         nome_utente = utente.nome if utente.username is None else utente.username
         answer = f"🎖 Utente Premium\n" if utente.premium == 1 else ''
         answer += f"✅ Abbonamento attivo (fino al {str(utente.scadenza_premium)[:11]})\n" if utente.abbonamento_attivo == 1 else ''
+        
+        # Growth Stage Display
+        emoji = "👨🏻" if utente.stadio_crescita == 'adulto' else "👦🏻"
+        stage_name = utente.stadio_crescita.capitalize()
+        answer += f"{emoji} **Stadio**: {stage_name}\n"
 
         answer += f"*👤 {nome_utente}*: {utente.points} {PointsName}\n"
         try:
@@ -467,6 +463,11 @@ class Utente(Base):
             # Display Skill
             skill_name = selectedLevel.skill_name or "Attacco Speciale"
             multiplier = selectedLevel.skill_multiplier or 3.0
+            
+            # Adult Bonus: Skills are 50% more powerful
+            if utente.stadio_crescita == 'adulto':
+                multiplier *= 1.5
+                
             cost = selectedLevel.skill_aura_cost or 60
             skill_dmg = int((utente.stat_danno or 0) * 2 * multiplier) # Estimated base damage
             
@@ -475,9 +476,6 @@ class Utente(Base):
         else:
             answer += f"*🎖 Lv. *{utente.livello}\n"
 
-        if giochiutente:
-            answer += '\n\n👾 Nome in Game 👾\n'
-            answer += '\n'.join(f"*🎮 {giocoutente.piattaforma}:* `{giocoutente.nome}`" for giocoutente in giochiutente)
 
         return answer
 
@@ -662,6 +660,7 @@ class Livello(Base):
     exp_to_lv = Column('exp_to_lv',Integer)
     nome  = Column('nome', String(32))
     link_img = Column('link_img',String(128))
+    link_img_adult = Column('link_img_adult', String(128)) # Adult variant
     saga = Column('saga',String(128))
     lv_premium = Column('lv_premium',Integer)
     skill_name = Column(String(64), default="Attacco Speciale")
@@ -685,6 +684,7 @@ class Livello(Base):
                 livello.nome = nome
                 livello.exp_to_lv = exp_to_lv
                 livello.link_img = link_img
+                livello.link_img_adult = None # Set later
                 livello.saga = saga
                 livello.lv_premium = lv_premium
                 session.add(livello)
@@ -1049,8 +1049,7 @@ class Collezionabili(Base):
             id_telegram = message.from_user.id
             utente = Utente().getUtente(id_telegram)
             
-            if trappola.id_utente == id_telegram and trappola.tipo == 'Nitro':
-                session.close() # Close session before returning
+            if trappola.id_utente == id_telegram and trappola.tipo in ['Nitro', 'TNT']:
                 return False
 
             # Eliminiamo la trappola prima di scatenare l'effetto per evitare loop
@@ -1113,7 +1112,11 @@ class Collezionabili(Base):
                                 self.CreateCollezionabile(id_telegram, sphere_name, 1)
                                 try:
                                     bot.send_sticker(chat_id, open(f"Stickers/{sticker}", 'rb'))
-                                    bot.send_message(chat_id, f"📡 **Radar Cercasfere**: Il segnale era corretto! Hai trovato una Sfera del Drago!")
+                                    bot.reply_to(message, "✨ Hai trovato: Sfera del Drago!")
+                                    # Private notification
+                                    try:
+                                        bot.send_message(id_telegram, f"✨ Hai trovato: {sphere_name}!")
+                                    except: pass
                                 except: pass
                                 return True
                 except: pass
@@ -1169,12 +1172,12 @@ class Collezionabili(Base):
             if culo == tento_oggetto['rarita']:
                 try:
                     ch = 10 if 'Radar' in tento_oggetto['nome'] else 0
-                    self.CreateCollezionabile(id_telegram, tento_oggetto['nome'], quantita, cariche=ch)
+                    # self.CreateCollezionabile(id_telegram, tento_oggetto['nome'], quantita, cariche=ch) # MOVED to triggerDrop
                     
                     sti = open(f"Stickers/{tento_oggetto['sticker']}", 'rb')
                     bot.send_sticker(message.chat.id, sti)
                     sti.close() 
-                    self.triggerDrop(message, tento_oggetto, quantita)
+                    self.triggerDrop(message, tento_oggetto, quantita, cariche=ch)
                     return True
                 except FileNotFoundError:
                     print(f"Sticker not found: Stickers/{tento_oggetto['sticker']}")
@@ -1203,7 +1206,7 @@ class Collezionabili(Base):
         Utente().addPoints(utente,wumpa_extra)
         bot.reply_to(message, "📦 Hai trovato una cassa con "+str(wumpa_extra)+" "+PointsName+"!\n\n"+Utente().infoUser(utente),parse_mode='markdown')
 
-    def triggerDrop(self,message,oggetto,quantita):
+    def triggerDrop(self,message,oggetto,quantita, **kwargs):
         id_telegram = message.from_user.id
         utente = Utente().getUtente(id_telegram)
         
@@ -1217,9 +1220,11 @@ class Collezionabili(Base):
         elif oggetto['nome']=='Cassa':
             self.cassaWumpa(utente,message)
         elif 'La Sfera del Drago' in oggetto['nome']:
+            self.CreateCollezionabile(id_telegram,oggetto['nome'],quantita)
+            bot.reply_to(message,f"✨ Hai trovato: {oggetto['nome']}!")
             drago(utente,message)
         else:
-            self.CreateCollezionabile(id_telegram,oggetto['nome'],quantita)
+            self.CreateCollezionabile(id_telegram,oggetto['nome'],quantita, cariche=kwargs.get('cariche', 0))
             bot.reply_to(message,f"Complimenti! Hai ottenuto {oggetto['nome']}")
             
 
@@ -1322,6 +1327,37 @@ class BossTemplate(Base):
     points_reward_total = Column(Integer)
     season_id = Column(Integer, default=1) # Linked to Season
     saga = Column(String) # Linked to a specific saga (e.g. "Saga di Pilaf")
+    is_boss = Column(Boolean, default=False)
+
+    # --- LEVELING & SCALING ---
+    livello = Column(Integer, default=1)
+    hp_base = Column(Integer, default=100)
+    hp_per_lv = Column(Integer, default=30)
+    atk_base = Column(Integer, default=10)
+    atk_per_lv = Column(Integer, default=4)
+    xp_base = Column(Integer, default=50)
+    xp_per_lv = Column(Integer, default=20)
+    is_elite = Column(Boolean, default=False)
+
+    def calculate_and_sync_stats(self):
+        """
+        Calculates HP, ATK, and XP based on current level and base/growth values.
+        If is_elite is True, stats are significantly boosted.
+        """
+        # Base formulas
+        h = self.hp_base + (self.livello * self.hp_per_lv)
+        a = self.atk_base + (self.livello * self.atk_per_lv)
+        x = self.xp_base + (self.livello * self.xp_per_lv)
+
+        # Elite Multipliers
+        if self.is_elite:
+            h = int(h * 2.5)  # 2.5x HP
+            a = int(a * 2.5)  # 2.5x ATK
+            x = int(x * 2.0)  # 2.0x XP Reward
+
+        self.hp_max = h
+        self.atk = a
+        self.xp_reward_total = x
 
 class ActiveRaid(Base):
     __tablename__ = 'active_raid'
@@ -1332,6 +1368,7 @@ class ActiveRaid(Base):
     chat_id = Column(Integer)
     message_id = Column(Integer)
     active = Column(Boolean, default=True)
+    last_log = Column(Text)
 
 class RaidParticipant(Base):
     __tablename__ = 'raid_participant'
@@ -1340,3 +1377,252 @@ class RaidParticipant(Base):
     user_id = Column(Integer, ForeignKey('utente.id_Telegram'))
     dmg_total = Column(Integer, default=0)
     last_attack_time = Column(DateTime)
+
+
+def spawn_random_seasonal_boss(only_boss=False):
+    """Selects and spawns a random boss or mob for the current active season."""
+    session = Database().Session()
+    try:
+        # 1. Get Active Season
+        active_season = session.query(Season).filter_by(active=True).first()
+        
+        bosses = []
+        if active_season:
+            # Find eligible templates (matching saga name and boss/mob flag)
+            bosses = session.query(BossTemplate).filter(
+                BossTemplate.saga == active_season.nome, 
+                BossTemplate.is_boss == only_boss
+            ).all()
+            
+            # Fallback: if no match by name, try season_id
+            if not bosses:
+                bosses = session.query(BossTemplate).filter_by(season_id=active_season.id, is_boss=only_boss).all()
+        else:
+            print("No active season found. Using general/fallback pool.")
+
+        if not bosses:
+            # Fallback 1: Default Season (ID=1)
+            bosses = session.query(BossTemplate).filter_by(season_id=1, is_boss=only_boss).all()
+            
+        if not bosses:
+            # Fallback 2: Any available matching type
+            bosses = session.query(BossTemplate).filter_by(is_boss=only_boss).all()
+
+        if not bosses:
+            print("No bosses available in database.")
+            return
+
+        boss = random.choice(bosses)
+
+        # 3. Check for active raid
+        existing_raid = session.query(ActiveRaid).filter_by(active=True, chat_id=Tecnologia_GRUPPO).first()
+        if existing_raid:
+            print(f"Raid already active: {existing_raid.id}")
+            return
+
+        # 4. Spawn logic
+        raid = ActiveRaid(
+            boss_id=boss.id,
+            hp_current=boss.hp_max,
+            hp_max=boss.hp_max,
+            chat_id=Tecnologia_GRUPPO,
+            active=True,
+            last_log="🐉 Il Boss sta osservando i nemici..."
+        )
+        session.add(raid)
+        session.flush()
+
+        msg_text = f"🔥 **UN NEMICO È APPARSO!** 🔥\n\n"
+        msg_text += f"Un guerriero selvatico è apparso nel gruppo!\n\n"
+        
+        elite_tag = " [ELITE] 🌟" if boss.is_elite else ""
+        msg_text += f"👾 **Boss**: {boss.nome}{elite_tag}\n"
+        msg_text += f"📊 **Livello**: {boss.livello}\n"
+        msg_text += f"❤️ **Salute**: {boss.hp_max}/{boss.hp_max} HP\n"
+        msg_text += f"⚔️ **Danno**: {boss.atk}\n\n"
+        msg_text += f"📜 **Ultima Azione**:\n{raid.last_log}\n\n"
+        msg_text += "⚔️ Sconfiggilo per ottenere ricompense!"
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.row(
+            types.InlineKeyboardButton("⚔️ Attacca", callback_data=f"raid_atk_{raid.id}"),
+            types.InlineKeyboardButton("✨ Attacco Speciale", callback_data=f"raid_spc_{raid.id}")
+        )
+
+        if boss.image_url:
+            try:
+                sent_msg = bot.send_photo(Tecnologia_GRUPPO, boss.image_url, caption=msg_text, parse_mode='Markdown', reply_markup=markup)
+            except:
+                sent_msg = bot.send_message(Tecnologia_GRUPPO, msg_text, parse_mode='Markdown', reply_markup=markup)
+        else:
+            sent_msg = bot.send_message(Tecnologia_GRUPPO, msg_text, parse_mode='Markdown', reply_markup=markup)
+
+        raid.message_id = sent_msg.message_id
+        session.commit()
+        print(f"Spawned Seasonal Boss: {boss.nome}")
+
+    except Exception as e:
+        print(f"Error in auto-spawn: {e}")
+    finally:
+        session.close()
+
+def boss_auto_attack_job():
+    """Background task: Boss attacks a random player in the group every 60s."""
+    session = Database().Session()
+    try:
+        # 1. Find Active Raid
+        raid = session.query(ActiveRaid).filter_by(active=True, chat_id=Tecnologia_GRUPPO).first()
+        if not raid:
+            return
+
+        boss = session.get(BossTemplate, raid.boss_id)
+        if not boss:
+            return
+
+        # 2. Pick Target (Alive participants only)
+        target_id = None
+        participants = session.query(RaidParticipant).filter_by(raid_id=raid.id).all()
+        alive_ids = []
+        
+        for p in participants:
+            u = session.query(Utente).filter_by(id_telegram=p.user_id).first()
+            if u and (u.vita or 0) > 0:
+                alive_ids.append(p.user_id)
+        
+        if alive_ids:
+            target_id = random.choice(alive_ids)
+        else:
+            # Fallback: Random user who has played (XP > 0) AND is alive
+            active_users = session.query(Utente).filter(Utente.exp > 0, Utente.vita > 0).all()
+            if active_users:
+                target_id = random.choice(active_users).id_telegram
+
+        if not target_id:
+            return
+
+        target = session.query(Utente).filter_by(id_telegram=target_id).first()
+        if not target:
+            return
+
+        # 3. Calculate Damage & Multipliers
+        base_dmg = boss.atk
+        is_special = random.randint(1, 100) <= 15
+        is_crit = random.randint(1, 100) <= 10
+        
+        attack_name = "un attacco fisico"
+        dmg_mult = 1.0
+        
+        if is_special:
+            attack_name = random.choice([
+                "un'onda energetica", "un colpo a tradimento", 
+                "un raggio micidiale", "una tecnica segreta"
+            ])
+            dmg_mult *= 1.5
+            
+        final_dmg = int(base_dmg * dmg_mult)
+        
+        if is_crit:
+            final_dmg *= 2
+            attack_name += " **CRITICO**"
+
+        # 4. Apply Damage
+        target.vita = max(0, target.vita - final_dmg)
+        
+        # --- 5. Construct Log ---
+        log_msg = f"👾 **{boss.nome}** lancia {attack_name}!\n💥 **{target.nome}** ha subito **{final_dmg}** danni!"
+        if target.vita <= 0:
+            log_msg += f"\n💀 **{target.nome}** è andato K.O.!"
+        
+        raid.last_log = log_msg
+
+        # --- 6. Update UI (Delete Old, Send New) ---
+        try:
+            bot.delete_message(raid.chat_id, raid.message_id)
+        except: pass
+
+        blocks = 10
+        filled = int(round(blocks * raid.hp_current / raid.hp_max))
+        bar = "🟥" * filled + "⬜️" * (blocks - filled)
+        
+        msg_text = f"⚠️ **BOSS RAID: {boss.nome}** ⚠️\n"
+        msg_text += f"❤️ Vita: [{bar}] {raid.hp_current}/{raid.hp_max}\n"
+        msg_text += f"\n📜 **Ultima Azione**:\n{raid.last_log}"
+
+        try:
+            markup = types.InlineKeyboardMarkup()
+            markup.row(
+                types.InlineKeyboardButton("⚔️ Attacca", callback_data=f"raid_atk_{raid.id}"),
+                types.InlineKeyboardButton("✨ Attacco Speciale", callback_data=f"raid_spc_{raid.id}")
+            )
+            
+            if boss.image_url:
+                try:
+                    sent = bot.send_photo(raid.chat_id, boss.image_url, caption=msg_text, parse_mode='Markdown', reply_markup=markup)
+                except:
+                    sent = bot.send_message(raid.chat_id, msg_text, parse_mode='Markdown', reply_markup=markup)
+            else:
+                sent = bot.send_message(raid.chat_id, msg_text, parse_mode='Markdown', reply_markup=markup)
+            
+            raid.message_id = sent.message_id
+        except Exception as e_send:
+            print(f"Boss Turn Repost Error: {e_send}")
+
+        session.commit()
+
+    except Exception as e:
+        print(f"Error in boss auto-attack: {e}")
+    finally:
+        session.close()
+
+def process_season_end(season):
+    """Calculates top players and announces end of season."""
+    session = Database().Session()
+    try:
+        # 1. Fetch Top 3
+        top_players = session.query(UserSeasonProgress).filter_by(season_id=season.id).order_by(UserSeasonProgress.season_exp.desc()).limit(3).all()
+        
+        msg = f"🏆 **FINE STAGIONE: {season.nome}** 🏆\n\n"
+        msg += "Il tempo è scaduto! Ecco i guerrieri più valorosi di questa stagione che ricevono i premi automatici:\n\n"
+        
+        medals = ["🥇", "🥈", "🥉"]
+        rewards = [5000, 2500, 1000] # Standard rewards
+        
+        for i, prog in enumerate(top_players):
+            user = session.query(Utente).filter_by(id_telegram=prog.user_id).first()
+            if user:
+                premio = rewards[i] if i < len(rewards) else 0
+                user.points += premio
+                msg += f"{medals[i]} **{user.nome}** - {prog.season_exp} XP (+{premio} {PointsName})\n"
+            else:
+                msg += f"{medals[i]} **Guerriero {prog.user_id}** - {prog.season_exp} XP\n"
+        
+        if not top_players:
+            msg += "Nessun gurreiro ha partecipato a questa stagione... che peccato!\n"
+            
+        msg += "\n🎉 Complimenti ai vincitori! I premi sono stati accreditati automaticamente sui vostri account."
+        msg += "\n\nLa stagione è ora **CHIUSA**. Restate sintonizzati per la prossima!"
+        
+        bot.send_message(Tecnologia_GRUPPO, msg, parse_mode='Markdown')
+        
+        # 2. Deactivate
+        season.active = False
+        session.add(season)
+        session.commit()
+    except Exception as e:
+        print(f"Error processing season end: {e}")
+    finally:
+        session.close()
+
+def check_season_expiry():
+    """Checks if the active season has reached its end date."""
+    session = Database().Session()
+    try:
+        active_season = session.query(Season).filter_by(active=True).first()
+        if active_season and active_season.data_fine:
+            if datetime.date.today() >= active_season.data_fine:
+                print(f"Season {active_season.id} expired. Ending it...")
+                process_season_end(active_season)
+    except Exception as e:
+        print(f"Error checking season expiry: {e}")
+    finally:
+        session.close()

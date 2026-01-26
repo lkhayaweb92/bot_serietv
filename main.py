@@ -1,7 +1,7 @@
 from telebot import types
 from settings import *
 from sqlalchemy         import create_engine
-from model import Livello, Utente, Abbonamento, Database, GiocoUtente,Collezionabili, use_dragon_balls_logic, Season, SeasonTier, UserSeasonProgress, BossTemplate, ActiveRaid, RaidParticipant
+from model import Livello, Utente, Abbonamento, Database,Collezionabili, use_dragon_balls_logic, Season, SeasonTier, UserSeasonProgress, BossTemplate, ActiveRaid, RaidParticipant, spawn_random_seasonal_boss, boss_auto_attack_job, process_season_end, check_season_expiry
 import Points
 from telebot import util
 import schedule,time,threading
@@ -68,7 +68,6 @@ class BotCommands:
             "✖️ Disattiva rinnovo automatico": self.handle_disattiva_abbonamento_premium,
             "✅ Attiva rinnovo automatico": self.handle_attiva_abbonamento_premium,
             "classifica": self.handle_classifica,
-            "nome in game": self.handle_nome_in_game,
             "compro un altro mese": self.handle_buy_another_month,
             "ℹ️ info": self.handle_info,
             "🎒 Inventario": self.handle_inventario,
@@ -97,10 +96,17 @@ class BotCommands:
             "set_boss_img": self.handle_set_boss_img,
             "add_boss": self.handle_add_boss,
             "add_saga_boss": self.handle_add_saga_boss,
+            "add_mob": self.handle_add_mob,
+            "add_mob_adv": self.handle_add_mob_adv,
+            "edit_boss": self.handle_edit_boss,
+            "set_boss_flag": self.handle_set_boss_flag,
+            "set_lv": self.handle_set_lv,
             "season_list": self.handle_season_list,
             "season_set": self.handle_season_set,
             "spawn_random": self.handle_spawn_random,
             "boss_list": self.handle_boss_list,
+            "kill_raid": self.handle_kill_raid,
+            "set_adult_img": self.handle_set_adult_img,
         }
         self.comandi_generici = {
             "!dona": self.handle_dona,
@@ -110,7 +116,6 @@ class BotCommands:
             "!classifica": self.handle_classifica,
             "!stats": self.handle_stats,
             "!livell": self.handle_livell,
-            "album": self.handle_album,
             "!inventario": self.handle_inventario,
             "/inventario": self.handle_inventario,
             "!negozio_pozioni": self.handle_negozio_pozioni,
@@ -119,6 +124,7 @@ class BotCommands:
             "/pass": self.handle_pass,
             "!saga": self.handle_saga,
             "/saga": self.handle_saga,
+            "/cresci": self.handle_cresci,
         }
         try:
             self.chatid = message.from_user.id
@@ -127,24 +133,25 @@ class BotCommands:
     
     def handle_private_command(self):
         message = self.message
-        if hasattr(message.forward_from_chat,'id'):
-            buy1game(message)
-        else:
-            for command in self.comandi_privati.items():
-                if command[0].lower() in message.text.lower():
-                    command[1]()
-                    break
+        for command, handler in self.comandi_privati.items():
+            if message.text.lower().startswith(command.lower()):
+                handler()
+                break
     def handle_admin_command(self):
         message = self.message
-        for command in self.comandi_admin.items():
-            if command[0].lower() in message.text.lower():
-                command[1]()
+        msg_text = message.text.lower()
+        for command, handler in self.comandi_admin.items():
+            cmd_lower = command.lower()
+            if msg_text.startswith(cmd_lower) or msg_text.startswith("/" + cmd_lower) or msg_text.startswith("!" + cmd_lower):
+                handler()
                 break
     def handle_generic_command(self):
         message = self.message
-        for command in self.comandi_generici.items():
-            if command[0].lower() in message.text.lower():
-                command[1]()
+        msg_text = message.text.lower()
+        for command, handler in self.comandi_generici.items():
+            cmd_lower = command.lower()
+            if msg_text.startswith(cmd_lower) or msg_text.startswith("/" + cmd_lower) or msg_text.startswith("!" + cmd_lower):
+                handler()
                 break
 
     def handle_negozio_pozioni(self):
@@ -213,7 +220,8 @@ class BotCommands:
                 hp_current=boss.hp_max,
                 hp_max=boss.hp_max,
                 chat_id=Tecnologia_GRUPPO,
-                active=True
+                active=True,
+                last_log="🐉 Il Boss sta osservando i nemici..."
             )
             session.add(raid)
             session.flush() # Get ID
@@ -221,7 +229,8 @@ class BotCommands:
             # Prepare Message
             msg_text = f"⚠️ **BOSS RAID: {boss.nome}** ⚠️\n"
             msg_text += f"❤️ Vita: {boss.hp_max}/{boss.hp_max}\n"
-            msg_text += f"⚔️ Attacco: {boss.atk}\n"
+            msg_text += f"⚔️ Attacco: {boss.atk}\n\n"
+            msg_text += f"📜 **Ultima Azione**:\n{raid.last_log}\n\n"
             msg_text += "Preparatevi alla battaglia!"
             
             markup = types.InlineKeyboardMarkup()
@@ -232,7 +241,10 @@ class BotCommands:
 
             # Send Message (Image or Text)
             if boss.image_url:
-                sent_msg = self.bot.send_photo(Tecnologia_GRUPPO, boss.image_url, caption=msg_text, parse_mode='Markdown', reply_markup=markup)
+                try:
+                    sent_msg = self.bot.send_photo(Tecnologia_GRUPPO, boss.image_url, caption=msg_text, parse_mode='Markdown', reply_markup=markup)
+                except:
+                    sent_msg = self.bot.send_message(Tecnologia_GRUPPO, msg_text, parse_mode='Markdown', reply_markup=markup)
             else:
                 sent_msg = self.bot.send_message(Tecnologia_GRUPPO, msg_text, parse_mode='Markdown', reply_markup=markup)
 
@@ -259,7 +271,7 @@ class BotCommands:
                 self.bot.reply_to(self.message, "⚠️ C'è già un Raid attivo nel gruppo!")
                 return
 
-            spawn_random_seasonal_boss()
+            spawn_random_seasonal_boss(only_boss=False) # Spawns a Mob
             self.bot.reply_to(self.message, "✅ Spawn casuale stagionale attivato!")
         except Exception as e:
             self.bot.reply_to(self.message, f"❌ Errore durante lo spawn casuale: {e}")
@@ -440,7 +452,12 @@ class BotCommands:
                 self.bot.reply_to(self.message, "📭 Nessuna stagione attiva. Usa `!season_list` per attivarne una.")
                 return
 
-            bosses = session.query(BossTemplate).filter_by(season_id=active_season.id).all()
+            # Filter by matching saga name
+            bosses = session.query(BossTemplate).filter(BossTemplate.saga == active_season.nome).all()
+            
+            # Fallback to season_id
+            if not bosses:
+                bosses = session.query(BossTemplate).filter_by(season_id=active_season.id).all()
             if not bosses:
                 self.bot.reply_to(self.message, f"🎴 Nessun boss trovato per la stagione {active_season.nome}.")
                 return
@@ -454,6 +471,88 @@ class BotCommands:
             self.bot.reply_to(self.message, msg, parse_mode='Markdown')
         except Exception as e:
             self.bot.reply_to(self.message, f"❌ Errore: {e}")
+        finally:
+            session.close()
+
+    def handle_kill_raid(self):
+        # !kill_raid
+        session = Database().Session()
+        try:
+            raid = session.query(ActiveRaid).filter_by(active=True, chat_id=Tecnologia_GRUPPO).first()
+            if not raid:
+                self.bot.reply_to(self.message, "❌ Non c'è nessun Raid attivo nel gruppo.")
+                return
+
+            boss = session.get(BossTemplate, raid.boss_id)
+            
+            # 1. Kill the Boss
+            raid.active = False
+            raid.hp_current = 0
+            
+            # 2. Loot Distribution
+            participants = session.query(RaidParticipant).filter_by(raid_id=raid.id).all()
+            total_raid_dmg = sum(p.dmg_total for p in participants)
+            
+            loot_msg = f"💀 **{boss.nome} è stato ELIMINATO dall'Admin!** 💀\n\n💰 Ricompense (proporzionali ai danni fatti):\n"
+            
+            if total_raid_dmg > 0:
+                for p in participants:
+                    share = p.dmg_total / total_raid_dmg
+                    xp_gain = int(boss.xp_reward_total * share)
+                    pts_gain = int(boss.points_reward_total * share)
+                    
+                    p_user = session.query(Utente).filter_by(id_telegram=p.user_id).first()
+                    if p_user:
+                        p_user.exp += xp_gain
+                        p_user.points += pts_gain
+                        loot_msg += f"👤 {p_user.nome}: {p.dmg_total} dmg -> {xp_gain} XP, {pts_gain} {PointsName}\n"
+                        
+                        # Add Season EXP
+                        active_season = session.query(Season).filter_by(active=True).first()
+                        if active_season:
+                            prog = session.query(UserSeasonProgress).filter_by(user_id=p.user_id, season_id=active_season.id).first()
+                            if not prog:
+                                prog = UserSeasonProgress(user_id=p.user_id, season_id=active_season.id, season_exp=0, season_level=1)
+                                session.add(prog)
+                                session.flush()
+                            prog.season_exp += xp_gain
+                
+                # Loot message will be sent after the visual UI update below
+                pass
+            else:
+                bot.send_message(raid.chat_id, f"💀 Il Boss {boss.nome} è stato rimosso dall'Admin. Nessun premio assegnato (0 danni totali).")
+
+            # 3. Update Group UI (Delete Old, Send Brand New Final Message)
+            try:
+                bot.delete_message(raid.chat_id, raid.message_id)
+            except: pass
+
+            blocks = 10
+            bar = "⬜️" * blocks
+            msg_text = f"⚠️ **BOSS RAID: {boss.nome}** ⚠️\n"
+            msg_text += f"❤️ Vita: [{bar}] 0/{raid.hp_max}\n"
+            msg_text += f"\n❌ **SCONFITTO (Intervento Admin)**"
+            
+            try:
+                if boss.image_url:
+                    try:
+                        bot.send_photo(raid.chat_id, boss.image_url, caption=msg_text, parse_mode='Markdown')
+                    except:
+                        bot.send_message(raid.chat_id, msg_text, parse_mode='Markdown')
+                else:
+                    bot.send_message(raid.chat_id, msg_text, parse_mode='Markdown')
+            except: pass
+
+            # 4. Send Loot Message LAST (if any)
+            if total_raid_dmg > 0 and 'loot_msg' in locals():
+                bot.send_message(raid.chat_id, loot_msg)
+
+            session.commit()
+            bot.reply_to(self.message, "✅ Raid terminato con successo!")
+
+        except Exception as e:
+            print(f"Error killing raid: {e}")
+            self.bot.reply_to(self.message, f"❌ Errore tecnico: {e}")
         finally:
             session.close()
 
@@ -479,7 +578,8 @@ class BotCommands:
                 atk=atk,
                 xp_reward_total=xp,
                 points_reward_total=points,
-                image_url=None # Set later with /set_boss_img
+                image_url=None, # Set later with /set_boss_img
+                is_boss=True
             )
             session.add(new_boss)
             session.commit()
@@ -493,39 +593,185 @@ class BotCommands:
             bot.reply_to(self.message, f"❌ Errore: {e}")
 
     def handle_add_saga_boss(self):
-        # /add_saga_boss [HP] [ATK] [XP] [POINTS] [SAGA] [NOME...]
-        # Example: /add_saga_boss 1000 50 100 50 Pilaf Pilaf Robot
+        # /add_saga_boss [LV] [SAGA] [NOME...]
         args = self.message.text.split()
-        if len(args) < 7:
-            bot.reply_to(self.message, "Usa: `/add_saga_boss [HP] [ATK] [XP] [POINTS] [SAGA] [NOME]`", parse_mode='Markdown')
+        if len(args) < 4:
+            bot.reply_to(self.message, "Usa: `/add_saga_boss [LV] [SAGA] [NOME]`", parse_mode='Markdown')
             return
         
         try:
-            hp = int(args[1])
-            atk = int(args[2])
-            xp = int(args[3])
-            points = int(args[4])
-            saga = args[5].replace("_", " ") 
-            nome = " ".join(args[6:])
+            lv = int(args[1])
+            saga = args[2].replace("_", " ") 
+            nome = " ".join(args[3:])
             
             session = Database().Session()
+            
+            # Auto-detect elite from name
+            is_elite = "(elite)" in nome.lower()
+            
             new_boss = BossTemplate(
                 nome=nome,
-                hp_max=hp,
-                atk=atk,
-                xp_reward_total=xp,
-                points_reward_total=points,
                 saga=saga,
-                image_url=None
+                livello=lv,
+                is_boss=True,
+                is_elite=is_elite
             )
+            new_boss.calculate_and_sync_stats() # Auto calc stats
             session.add(new_boss)
             session.commit()
             
-            bot.reply_to(self.message, f"✅ Boss **{nome}** aggiunto alla saga **{saga}** con ID: **{new_boss.id}**")
+            bot.reply_to(self.message, f"✅ Boss **{nome}** (Livello {lv}) aggiunto alla saga **{saga}** con ID: **{new_boss.id}**")
             session.close()
             
         except ValueError:
             bot.reply_to(self.message, "⚠️ I primi 4 valori devono essere numeri!")
+        except Exception as e:
+            bot.reply_to(self.message, f"❌ Errore: {e}")
+
+    def handle_add_mob(self):
+        # /add_mob [LV] [SAGA] [NOME...]
+        args = self.message.text.split()
+        if len(args) < 4:
+            bot.reply_to(self.message, "Usa: `/add_mob [LV] [SAGA] [NOME]`", parse_mode='Markdown')
+            return
+        
+        try:
+            lv = int(args[1])
+            saga = args[2].replace("_", " ") 
+            nome = " ".join(args[3:])
+            
+            session = Database().Session()
+            
+            # Auto-detect elite from name
+            is_elite = "(elite)" in nome.lower()
+            
+            new_boss = BossTemplate(
+                nome=nome,
+                saga=saga,
+                livello=lv,
+                is_boss=False, # It's a Mob
+                is_elite=is_elite
+            )
+            new_boss.calculate_and_sync_stats() # Auto calc stats
+            session.add(new_boss)
+            session.commit()
+            
+            bot.reply_to(self.message, f"✅ Mob **{nome}** (Livello {lv}) aggiunto alla saga **{saga}** con ID: **{new_boss.id}**")
+            session.close()
+        except ValueError:
+             bot.reply_to(self.message, "⚠️ Il livello deve essere un numero!")
+        except Exception as e:
+            bot.reply_to(self.message, f"❌ Errore: {e}")
+
+    def handle_add_mob_adv(self):
+        # /add_mob_adv [LV] [HP_B] [HP_P] [ATK_B] [ATK_P] [XP_B] [XP_P] [SAGA] [NOME...]
+        args = self.message.text.split()
+        if len(args) < 10:
+            bot.reply_to(self.message, "Usa: `/add_mob_adv [LV] [HP_B] [HP_P] [ATK_B] [ATK_P] [XP_B] [XP_P] [SAGA] [NOME]`", parse_mode='Markdown')
+            return
+        try:
+            lv = int(args[1]); hp_b = int(args[2]); hp_p = int(args[3])
+            atk_b = int(args[4]); atk_p = int(args[5])
+            xp_b = int(args[6]); xp_p = int(args[7])
+            saga = args[8].replace("_", " ")
+            nome = " ".join(args[9:])
+
+            session = Database().Session()
+            new_mob = BossTemplate(
+                nome=nome, saga=saga, livello=lv,
+                hp_base=hp_b, hp_per_lv=hp_p,
+                atk_base=atk_b, atk_per_lv=atk_p,
+                xp_base=xp_b, xp_per_lv=xp_p,
+                is_boss=False
+            )
+            new_mob.calculate_and_sync_stats()
+            session.add(new_mob)
+            session.commit()
+            bot.reply_to(self.message, f"✅ Mob Avanzato **{nome}** (Livello {lv}) creato con successo!")
+            session.close()
+        except Exception as e:
+            bot.reply_to(self.message, f"❌ Errore: {e}")
+
+    def handle_set_boss_flag(self):
+        # /set_boss_flag [ID] [1/0]
+        args = self.message.text.split()
+        if len(args) < 3:
+            bot.reply_to(self.message, "Usa: `/set_boss_flag [ID] [1 per Boss, 0 per Mob]`")
+            return
+        
+        try:
+            b_id = int(args[1])
+            val = int(args[2]) == 1
+            
+            session = Database().Session()
+            boss = session.get(BossTemplate, b_id)
+            if boss:
+                boss.is_boss = val
+                session.commit()
+                label = "BOSS" if val else "MOB"
+                bot.reply_to(self.message, f"✅ Nemico {boss.nome} (ID {b_id}) impostato come **{label}**.")
+            else:
+                bot.reply_to(self.message, "❌ Nemico non trovato.")
+            session.close()
+        except:
+            bot.reply_to(self.message, "❌ Errore nei parametri.")
+
+    def handle_set_lv(self):
+        # /set_lv [ID] [LV]
+        args = self.message.text.split()
+        if len(args) < 3:
+            bot.reply_to(self.message, "Usa: `/set_lv [ID] [Livello]`")
+            return
+        try:
+            b_id = int(args[1])
+            new_lv = int(args[2])
+            session = Database().Session()
+            boss = session.get(BossTemplate, b_id)
+            if boss:
+                boss.livello = new_lv
+                boss.calculate_and_sync_stats()
+                session.commit()
+                bot.reply_to(self.message, f"📈 **{boss.nome}** aggiornato al Livello **{new_lv}**!\n❤️ HP: {boss.hp_max} | ⚔️ ATK: {boss.atk} | ✨ XP: {boss.xp_reward_total}")
+            else:
+                bot.reply_to(self.message, "❌ Nemico non trovato.")
+            session.close()
+        except Exception as e:
+            bot.reply_to(self.message, f"❌ Errore: {e}")
+
+    def handle_edit_boss(self):
+        # /edit_boss [ID] [HP] [ATK] [XP] [POINTS]
+        args = self.message.text.split()
+        if len(args) < 4:
+            bot.reply_to(self.message, "Usa: `/edit_boss [ID] [Nuovi HP] [Nuovo ATK] [XP (opz)] [PUNTI (opz)]`", parse_mode='Markdown')
+            return
+        
+        try:
+            b_id = int(args[1])
+            new_hp = int(args[2])
+            new_atk = int(args[3])
+            new_xp = int(args[4]) if len(args) > 4 else None
+            new_pts = int(args[5]) if len(args) > 5 else None
+            
+            session = Database().Session()
+            boss = session.get(BossTemplate, b_id)
+            if boss:
+                boss.hp_max = new_hp
+                boss.atk = new_atk
+                if new_xp is not None: boss.xp_reward_total = new_xp
+                if new_pts is not None: boss.points_reward_total = new_pts
+                
+                session.commit()
+                
+                msg = f"✅ Nemico **{boss.nome}** (ID {b_id}) aggiornato!\n❤️ Nuovi HP: {new_hp}\n⚔️ Nuovo ATK: {new_atk}"
+                if new_xp is not None: msg += f"\n✨ Nuovo Premio XP: {new_xp}"
+                if new_pts is not None: msg += f"\n💰 Nuovo Premio {PointsName}: {new_pts}"
+                
+                bot.reply_to(self.message, msg, parse_mode='Markdown')
+            else:
+                bot.reply_to(self.message, "❌ Nemico non trovato.")
+            session.close()
+        except ValueError:
+            bot.reply_to(self.message, "⚠️ Tutti i valori devono essere numeri!")
         except Exception as e:
             bot.reply_to(self.message, f"❌ Errore: {e}")
 
@@ -616,8 +862,8 @@ class BotCommands:
 
         # 3. Execute Purchase
         try:
-            # Deduct points
-            Database().update_user(self.chatid, {'points': utente.points - costo})
+            # Deduct points directly on the session object
+            utente.points -= costo
             
             # Add to Inventory
             # Format: 'Pozione {Type} {Size}'
@@ -629,7 +875,15 @@ class BotCommands:
                 category = "Rigenerante" # Fallback
 
             nome_oggetto = f"Pozione {category} {tipo_pozione}"
-            Collezionabili().CreateCollezionabile(self.chatid, nome_oggetto, 1)
+            
+            # Use local session to create collectible to avoid locks
+            new_item = Collezionabili(
+                id_telegram=str(self.chatid),
+                oggetto=nome_oggetto,
+                quantita=1,
+                data_acquisizione=datetime.datetime.now()
+            )
+            session.add(new_item)
             
             # Decrement Stock
             daily_shop.pozioni_rimanenti -= 1
@@ -641,8 +895,7 @@ class BotCommands:
             msg += f"💰 Costo: {costo}\n"
             msg += f"📦 Scorte globali rimanenti: {daily_shop.pozioni_rimanenti}"
             
-            utente_updated = Utente().getUtente(self.chatid)
-            self.bot.reply_to(self.message, msg + "\n\n" + Utente().infoUser(utente_updated), reply_markup=Database().negozioPozioniMarkup(self.chatid))
+            self.bot.reply_to(self.message, msg + "\n\n" + Utente().infoUser(utente), reply_markup=Database().negozioPozioniMarkup(self.chatid))
             
         except Exception as e:
             session.rollback()
@@ -653,16 +906,21 @@ class BotCommands:
 
     def handle_buy_radar(self):
         from model import DailyShop, Collezionabili
-        utente = Utente().getUtente(self.chatid)
-
-        session = Database().Session()
-        # Fetch the actual object (Radar Cercasfere) for current user
-        radar = session.query(Collezionabili).filter_by(id_telegram=str(self.chatid), oggetto="Radar Cercasfere", data_utilizzo=None).first()
         
+        session = Database().Session()
         now = datetime.datetime.now()
         oggi = datetime.date.today()
         
         try:
+            # 0. Fetch User within this session
+            utente = session.query(Utente).filter_by(id_telegram=self.chatid).first()
+            if not utente:
+                self.bot.reply_to(self.message, "Utente non trovato.")
+                return
+
+            # Fetch the actual object (Radar Cercasfere) for current user within this session
+            radar = session.query(Collezionabili).filter_by(id_telegram=str(self.chatid), oggetto="Radar Cercasfere", data_utilizzo=None).first()
+            
             # --- 1. Personal Cooldown (24h) ---
             if utente.last_radar_purchase:
                 diff = now - utente.last_radar_purchase
@@ -682,17 +940,14 @@ class BotCommands:
                 charges_to_add = 10
 
             # --- 3. Global Stock Check (2-Day Cycle / 48h) ---
-            # Get the LATEST entry for this specific item type
             daily = session.query(DailyShop).filter_by(id_utente=0, tipo_pozione=full_name).order_by(DailyShop.data.desc()).first()
             
-            # Restock logic: if none or older than 2 days (48h)
             if not daily or (oggi - daily.data).days >= 2:
                 daily = DailyShop(id_utente=0, data=oggi, tipo_pozione=full_name, pozioni_rimanenti=10)
                 session.add(daily)
-                session.flush() # Persist to use ID
+                session.flush()
 
             if daily.pozioni_rimanenti <= 0:
-                # Stock exhausted for current 48h window
                 days_since_start = (oggi - daily.data).days
                 days_left = 2 - days_since_start
                 self.bot.reply_to(self.message, f"⛔️ Le scorte globali di {full_name} sono esaurite!\nTorna tra circa {days_left} giorno/i per il rifornimento.")
@@ -704,17 +959,26 @@ class BotCommands:
                 return
 
             # --- 5. Finalize Purchase ---
-            Database().update_user(self.chatid, {
-                'points': utente.points - costo,
-                'last_radar_purchase': now
-            })
+            # Update user directly on the object fetched with the session
+            utente.points -= costo
+            utente.last_radar_purchase = now
             
-            if charges_to_add == 5:
-                # First purchase: item + 5 charges
-                Collezionabili().CreateCollezionabile(self.chatid, "Radar Cercasfere", 1, cariche=5)
+            if not radar:
+                # First purchase: Create new collectible
+                # We use the internal logic but bypass the separate session if possible
+                # However, CreateCollezionabile creates its own session. 
+                # Let's do it manually here to stay in the same session.
+                new_item = Collezionabili(
+                    id_telegram=str(self.chatid),
+                    oggetto="Radar Cercasfere",
+                    quantita=1,
+                    cariche=5,
+                    data_acquisizione=datetime.datetime.now()
+                )
+                session.add(new_item)
                 msg = f"📟 **Radar Cercasfere** ottenuto con **5 cariche**!"
             else:
-                # Refill: +10 charges to existing item
+                # Refill: Update existing object
                 radar.cariche += 10
                 msg = f"🔋 **Ricarica Effettuata**! +10 cariche (Totale: {radar.cariche})."
             
@@ -725,6 +989,7 @@ class BotCommands:
             self.bot.reply_to(self.message, final_msg, parse_mode='Markdown', reply_markup=Database().negozioPozioniMarkup(self.chatid))
 
         except Exception as e:
+            session.rollback()
             print(f"Errore gestione radar: {e}")
             self.bot.reply_to(self.message, "Errore tecnico durante l'operazione.")
         finally:
@@ -788,6 +1053,11 @@ class BotCommands:
             )
         
         markup.add(types.InlineKeyboardButton("🔄 Reset Statistiche (500 Fagioli)", callback_data="stat_reset"))
+
+        # Growth Button
+        can_grow, _ = utente.verifica_crescita()
+        if can_grow:
+            markup.add(types.InlineKeyboardButton("🌟 CRESCI (Disponibile!)", callback_data="trigger_growth"))
 
         self.bot.send_message(self.chatid, msg, reply_markup=markup)
 
@@ -962,15 +1232,59 @@ class BotCommands:
         selectedLevel = Livello().infoLivelloByID(utente.livello_selezionato)
         info_text = Utente().infoUser(utente)
         
-        if selectedLevel and selectedLevel.link_img:
-            try:
-                # Use message.chat.id instead of self.chatid to support groups
-                self.bot.send_photo(chat_id, selectedLevel.link_img, caption=info_text, parse_mode='markdown', reply_to_message_id=message.message_id)
-            except Exception as e:
-                print(f"Errore nell'invio della foto: {e}")
+        if selectedLevel:
+            img_to_send = selectedLevel.link_img_adult if (utente.stadio_crescita == 'adulto' and selectedLevel.link_img_adult) else selectedLevel.link_img
+            
+            if img_to_send:
+                try:
+                    # Use message.chat.id instead of self.chatid to support groups
+                    self.bot.send_photo(chat_id, img_to_send, caption=info_text, parse_mode='markdown', reply_to_message_id=message.message_id)
+                except Exception as e:
+                    print(f"Errore nell'invio della foto: {e}")
+                    self.bot.reply_to(message, info_text, parse_mode='markdown')
+            else:
                 self.bot.reply_to(message, info_text, parse_mode='markdown')
-        else:
-            self.bot.reply_to(message, info_text, parse_mode='markdown')
+
+    def handle_cresci(self):
+        """Allows a character to grow from Child to Adult if milestones are met."""
+        message = self.message
+        session = Database().Session()
+        try:
+            utente = session.query(Utente).filter_by(id_telegram=self.chatid).first()
+            if not utente:
+                self.bot.reply_to(message, "Utente non trovato.")
+                return
+
+            can_grow, reason = utente.verifica_crescita()
+            if not can_grow:
+                self.bot.reply_to(message, f"⚠️ **Crescita non disponibile**\n\n{reason}")
+                return
+
+            # Execute Growth
+            if utente.applica_crescita(session):
+                session.commit()
+                
+                # Dynamic Growth Message
+                msg = f"🌟 **IL POTERE SI RISVEGLIA!** 🌟\n\n"
+                msg += f"Complimenti {utente.nome}, sei diventato un **ADULTO**! 👨🏻\n\n"
+                msg += f"✨ **Bonus Statistiche Ottenuti**:\n"
+                msg += f"❤️ +100 HP\n"
+                msg += f"💙 +25 Aura\n"
+                msg += f"⚔️ +4 Danno Base\n\n"
+                msg += f"Il tuo potenziale è ora sbloccato. Continua ad allenarti!"
+                
+                self.bot.reply_to(message, msg)
+                # Redirect to Info to see new stats
+                self.handle_me()
+            else:
+                self.bot.reply_to(message, "Errore durante il processo di crescita.")
+
+        except Exception as e:
+            session.rollback()
+            print(f"Error in handle_cresci: {e}")
+            self.bot.reply_to(message, "Errore tecnico durante la crescita.")
+        finally:
+            session.close()
 
     def handle_status(self):
         message = self.message
@@ -1085,36 +1399,72 @@ class BotCommands:
         message = self.message
         comandi = message.text
         comandi = comandi.split('/addLivello')[1:]
-        for comando in comandi:
-            parametri = comando.split(";")
-            livello = int(parametri[1])
-            nome = parametri[2]
-            exp_to_lvl = int(parametri[3])
-            link_img = parametri[4]
-            saga = parametri[5]
-            lv_premium = int(parametri[6])
-            skill_name = parametri[7] if len(parametri) > 7 else "Attacco Speciale"
-            multiplier = float(parametri[8]) if len(parametri) > 8 else 3.0
-            cost = int(parametri[9]) if len(parametri) > 9 else 60
-            
-            # Update Livello model call
-            exist = session.query(Livello).filter_by(livello=livello, lv_premium=lv_premium).first()
-            if exist is None:
-                new_lv = Livello(
-                    livello=livello, nome=nome, exp_to_lv=exp_to_lvl, 
-                    link_img=link_img, saga=saga, lv_premium=lv_premium,
-                    skill_name=skill_name, skill_multiplier=multiplier, skill_aura_cost=cost
-                )
-                session.add(new_lv)
-            else:
-                exist.nome = nome
-                exist.exp_to_lv = exp_to_lvl
-                exist.link_img = link_img
-                exist.saga = saga
-                exist.skill_name = skill_name
-                exist.skill_multiplier = multiplier
-                exist.skill_aura_cost = cost
+        session = Database().Session()
+        try:
+            for comando in comandi:
+                parametri = comando.split(";")
+                livello = int(parametri[1])
+                nome = parametri[2]
+                exp_to_lvl = int(parametri[3])
+                link_img = parametri[4]
+                saga = parametri[5]
+                lv_premium = int(parametri[6])
+                skill_name = parametri[7] if len(parametri) > 7 else "Attacco Speciale"
+                multiplier = float(parametri[8]) if len(parametri) > 8 else 3.0
+                cost = int(parametri[9]) if len(parametri) > 9 else 60
+                link_img_adult = parametri[10] if len(parametri) > 10 else None
+                
+                # Update Livello model call
+                exist = session.query(Livello).filter_by(livello=livello, lv_premium=lv_premium).first()
+                if exist is None:
+                    new_lv = Livello(
+                        livello=livello, nome=nome, exp_to_lv=exp_to_lvl, 
+                        link_img=link_img, link_img_adult=link_img_adult, saga=saga, lv_premium=lv_premium,
+                        skill_name=skill_name, skill_multiplier=multiplier, skill_aura_cost=cost
+                    )
+                    session.add(new_lv)
+                else:
+                    exist.nome = nome
+                    exist.exp_to_lv = exp_to_lvl
+                    exist.link_img = link_img
+                    exist.link_img_adult = link_img_adult
+                    exist.saga = saga
+                    exist.skill_name = skill_name
+                    exist.skill_multiplier = multiplier
+                    exist.skill_aura_cost = cost
             session.commit()
+        except Exception as e:
+            session.rollback()
+            print(f"Error in handle_add_livello: {e}")
+        finally:
+            session.close()
+
+    def handle_set_adult_img(self):
+        """Admin command to set adult variant image: /set_adult_img CharacterName;ImageUrl"""
+        message = self.message
+        try:
+            parametri = message.text.split('/set_adult_img')[1].strip()
+            char_name, adult_url = [p.strip() for p in parametri.split(';')]
+            
+            session = Database().Session()
+            try:
+                # Find the level by name
+                lv_obj = session.query(Livello).filter_by(nome=char_name).first()
+                if lv_obj:
+                    lv_obj.link_img_adult = adult_url
+                    session.commit()
+                    self.bot.reply_to(message, f"✅ Immagine Adulta per **{char_name}** aggiornata!\n🔗 Link: {adult_url}")
+                else:
+                    self.bot.reply_to(message, f"❌ Personaggio '{char_name}' non trovato.")
+            except Exception as e:
+                session.rollback()
+                print(f"Error in set_adult_img DB: {e}")
+                self.bot.reply_to(message, "❌ Errore durante l'aggiornamento del DB.")
+            finally:
+                session.close()
+                
+        except Exception as e:
+            self.bot.reply_to(message, "⚠️ **Formato errato**\nUsa: `/set_adult_img NomePersonaggio;LinkImmagine`")
 
     def handle_plus_minus(self):
         message = self.message
@@ -1143,19 +1493,6 @@ class BotCommands:
         utenteSorgente = Utente().getUtente(utenteSorgente.id_telegram)
         self.bot.reply_to(message, 'Abbonamento annullato, sarà comunque valido fino al '+str(utenteSorgente.scadenza_premium)[:10],reply_markup=Database().startMarkup(utenteSorgente))
     
-    def handle_nome_in_game(self):
-        message = self.message
-        utente = Utente().getUtente(self.chatid)
-        giochiutente = GiocoUtente().getGiochiUtente(utente.id_telegram)
-        keyboard = types.InlineKeyboardMarkup()
-
-        for giocoutente in giochiutente:
-            remove_button = types.InlineKeyboardButton(f"❌ {giocoutente.piattaforma} {giocoutente.nome}", callback_data=f"remove_namegame_{giocoutente.id_telegram}_{giocoutente.piattaforma}_{giocoutente.nome}")
-            keyboard.add(remove_button)
-
-        add_button = types.InlineKeyboardButton("➕ Aggiungi Nome in Game", callback_data="add_namegame")
-        keyboard.add(add_button)
-        self.bot.reply_to(message, "Cosa vuoi fare?", reply_markup=keyboard)
     
     def handle_backup_all(self):
         message = self.message
@@ -1275,8 +1612,17 @@ def handle_inline_buttons(call):
             )
         
         markup.add(types.InlineKeyboardButton("🔄 Reset Statistiche (500 Fagioli)", callback_data="stat_reset"))
+        
+        # Growth Button
+        can_grow, _ = utente.verifica_crescita()
+        if can_grow:
+            markup.add(types.InlineKeyboardButton("🌟 CRESCI (Disponibile!)", callback_data="trigger_growth"))
+
         bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, reply_markup=markup)
 
+    elif action == "trigger_growth":
+        BotCommands(call.message, bot).handle_cresci()
+        
     elif action.startswith("stat_add_"):
         stat_name = action.replace("stat_add_", "")
         
@@ -1338,6 +1684,11 @@ def handle_inline_buttons(call):
                 )
             markup.add(types.InlineKeyboardButton("🔄 Reset Statistiche (500 Fagioli)", callback_data="stat_reset"))
             
+            # Growth Button
+            can_grow, _ = utente.verifica_crescita()
+            if can_grow:
+                markup.add(types.InlineKeyboardButton("🌟 CRESCI (Disponibile!)", callback_data="trigger_growth"))
+
             bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, reply_markup=markup)
         else:
             bot.answer_callback_query(call.id, "Non hai punti disponibili!")
@@ -1389,6 +1740,11 @@ def handle_inline_buttons(call):
             )
             markup.add(types.InlineKeyboardButton("🔄 Reset Statistiche (500 Fagioli)", callback_data="stat_reset"))
             
+            # Growth Button
+            can_grow, _ = utente.verifica_crescita()
+            if can_grow:
+                markup.add(types.InlineKeyboardButton("🌟 CRESCI (Disponibile!)", callback_data="trigger_growth"))
+
             bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, reply_markup=markup)
         else:
              bot.answer_callback_query(call.id, f"Non hai abbastanza Fagioli! Te ne servono {costo_reset}.")
@@ -1639,18 +1995,6 @@ def handle_inline_buttons(call):
             print(f"Errore nell'uso dell'oggetto: {e}")
             bot.answer_callback_query(call.id, "Errore durante l'uso dell'oggetto.")
 
-    elif action.startswith("remove_namegame_"):
-        parametri = action.replace('remove_namegame_','').split('_')
-        id_telegram = parametri[0]
-        piattaforma = parametri[1]
-        nome = parametri[2]
-        GiocoUtente().delPiattaformaUtente(id_telegram,piattaforma,nome)
-        bot.send_message(user_id,'Piattaforma eliminata',reply_markup=Database().startMarkup(utente))
-
-    elif action.startswith("add_namegame"):
-        msg = bot.send_message(user_id,'Scrivimi la piattaforma (spazio) nome utente, esempio "Steam alan.bimbati"')
-        bot.register_next_step_handler(msg, addnamegame)
-
     elif action == "pass_claim":
         session = Database().Session()
         try:
@@ -1789,6 +2133,11 @@ def handle_inline_buttons(call):
                 bot.answer_callback_query(call.id, "Errore: utente non trovato.")
                 return
 
+            # 0. Health Check
+            if (utente_live.vita or 0) <= 0:
+                bot.answer_callback_query(call.id, "💀 Sei K.O.! Devi recuperare vita per combattere.", show_alert=True)
+                return
+
             # 1. Cooldown Check
             participant = session.query(RaidParticipant).filter_by(raid_id=raid_id, user_id=user_id).first()
             now = datetime.datetime.now()
@@ -1849,13 +2198,7 @@ def handle_inline_buttons(call):
             
             log_msg = f"⚔️ {utente_live.nome} ha usato {attack_name}!\n💥 Danni: {final_dmg}"
             
-            # 4. Boss Retaliation (20% chance)
-            if random.randint(1, 100) <= 20:
-                boss_dmg = boss.atk
-                utente_live.vita = max(0, utente_live.vita - boss_dmg)
-                log_msg += f"\n⚠️ Il Boss ha contrattaccato! -{boss_dmg} HP a {utente_live.nome}"
-            
-            # 5. Check Death & Loot
+            # 4. Check Death & Loot
             is_boss_dead = False
             if raid.hp_current <= 0:
                 is_boss_dead = True
@@ -1886,41 +2229,88 @@ def handle_inline_buttons(call):
                                 session.flush()
                             prog.season_exp += xp_gain
                 
-                bot.send_message(raid.chat_id, loot_msg)
+                # loot_msg stored to be sent after UI update
+                pass
+            
+            # 5. Boss Retaliation (20% chance) - ONLY if boss still alive
+            elif random.randint(1, 100) <= 20:
+                # 5.1 Calculate Advanced Retaliation (Consistent with auto-attack)
+                is_special = random.randint(1, 100) <= 15
+                is_crit = random.randint(1, 100) <= 10
+                
+                boss_attack_name = "un colpo fisico"
+                dmg_mult = 1.0
+                
+                if is_special:
+                    boss_attack_name = random.choice([
+                        "un'onda energetica", "un attacco d'aura", 
+                        "un colpo brutale", "una tecnica rapida"
+                    ])
+                    dmg_mult = 1.5
+                    
+                final_boss_dmg = int(boss.atk * dmg_mult)
+                
+                if is_crit:
+                    final_boss_dmg *= 2
+                    boss_attack_name += " **CRITICO**"
 
+                utente_live.vita = max(0, utente_live.vita - final_boss_dmg)
+                log_msg += f"\n⚠️ Il Boss ha contrattaccato con {boss_attack_name}! -{final_boss_dmg} HP a {utente_live.nome}"
+            
             # Persist changes BEFORE updating UI
             session.commit()
             bot.answer_callback_query(call.id, f"Hai inflitto {final_dmg} danni!")
                 
-            # 6. Update UI
+            # 6. Update UI (Delete Old, Send New)
+            raid.last_log = log_msg
+            
+            # --- 6.1 Delete Old Message ---
+            try:
+                bot.delete_message(raid.chat_id, raid.message_id)
+            except Exception as e_del:
+                print(f"Raid Delete Error: {e_del}")
+
+            # --- 6.2 Construct New Message ---
             blocks = 10
             filled = int(round(blocks * raid.hp_current / raid.hp_max))
             bar = "🟥" * filled + "⬜️" * (blocks - filled)
             
             msg_text = f"⚠️ **BOSS RAID: {boss.nome}** ⚠️\n"
             msg_text += f"❤️ Vita: [{bar}] {raid.hp_current}/{raid.hp_max}\n"
-            msg_text += f"\n📜 **Ultima Azione**:\n{log_msg}"
+            msg_text += f"\n📜 **Ultima Azione**:\n{raid.last_log}"
             
+            if is_boss_dead:
+                msg_text += "\n\n❌ **SCONFITTO**"
+
+            # --- 6.3 Send New & Update ID ---
             try:
+                is_boss_dead = raid.hp_current <= 0 # Re-check status for message sequencing
+                markup = None
                 if not is_boss_dead:
                     markup = types.InlineKeyboardMarkup()
                     markup.row(
                         types.InlineKeyboardButton("⚔️ Attacca", callback_data=f"raid_atk_{raid.id}"),
                         types.InlineKeyboardButton("✨ Attacco Speciale", callback_data=f"raid_spc_{raid.id}")
                     )
-                    
-                    if boss.image_url:
-                        bot.edit_message_caption(chat_id=raid.chat_id, message_id=raid.message_id, caption=msg_text, parse_mode='Markdown', reply_markup=markup)
-                    else:
-                        bot.edit_message_text(chat_id=raid.chat_id, message_id=raid.message_id, text=msg_text, parse_mode='Markdown', reply_markup=markup)
+                
+                if boss.image_url:
+                    try:
+                        sent = bot.send_photo(raid.chat_id, boss.image_url, caption=msg_text, parse_mode='Markdown', reply_markup=markup)
+                    except:
+                        sent = bot.send_message(raid.chat_id, msg_text, parse_mode='Markdown', reply_markup=markup)
                 else:
-                    final_caption = msg_text + "\n\n❌ **SCONFITTO**"
-                    if boss.image_url:
-                        bot.edit_message_caption(chat_id=raid.chat_id, message_id=raid.message_id, caption=final_caption, parse_mode='Markdown')
-                    else:
-                        bot.edit_message_text(chat_id=raid.chat_id, message_id=raid.message_id, text=final_caption, parse_mode='Markdown')
-            except Exception as e_tg:
-                print(f"Telegram Edit Error: {e_tg}")
+                    sent = bot.send_message(raid.chat_id, msg_text, parse_mode='Markdown', reply_markup=markup)
+                
+                raid.message_id = sent.message_id
+
+                # --- 6.4 Send Loot Message LAST (if boss defeated) ---
+                if is_boss_dead and 'loot_msg' in locals():
+                    bot.send_message(raid.chat_id, loot_msg)
+
+            except Exception as e_send:
+                print(f"Raid Repost Error: {e_send}")
+
+            session.commit()
 
         except Exception as e:
             print(f"Error in raid action: {e}")
@@ -1928,271 +2318,6 @@ def handle_inline_buttons(call):
         finally:
             session.close()
 
-def spawn_random_seasonal_boss():
-    """Selects and spawns a random boss for the current active season."""
-    session = Database().Session()
-    try:
-        # 1. Get Active Season
-        active_season = session.query(Season).filter_by(active=True).first()
-        
-        bosses = []
-        if active_season:
-            # Find eligible bosses (matching season_id)
-            bosses = session.query(BossTemplate).filter_by(season_id=active_season.id).all()
-        else:
-            print("No active season found. Using general/fallback pool.")
-
-        if not bosses:
-            # Fallback 1: Default Season (ID=1)
-            bosses = session.query(BossTemplate).filter_by(season_id=1).all()
-            
-        if not bosses:
-            # Fallback 2: Any available boss
-            bosses = session.query(BossTemplate).all()
-
-        if not bosses:
-            print("No bosses available in database.")
-            return
-
-        boss = random.choice(bosses)
-
-        # 3. Check for active raid
-        existing_raid = session.query(ActiveRaid).filter_by(active=True, chat_id=Tecnologia_GRUPPO).first()
-        if existing_raid:
-            print(f"Raid already active: {existing_raid.id}")
-            return
-
-        # 4. Spawn logic
-        raid = ActiveRaid(
-            boss_id=boss.id,
-            hp_current=boss.hp_max,
-            hp_max=boss.hp_max,
-            chat_id=Tecnologia_GRUPPO,
-            active=True
-        )
-        session.add(raid)
-        session.flush()
-
-        msg_text = f"🚨 **ALLERTA BOSS RAID!** 🚨\n\n"
-        msg_text += f"Un nemico è apparso nel gruppo!\n"
-        msg_text += f"👾 **{boss.nome}**\n"
-        msg_text += f"❤️ Vita: {boss.hp_max}/{boss.hp_max}\n"
-        msg_text += f"⚔️ Attacco: {boss.atk}\n\n"
-        msg_text += "⚔️ Premete i pulsanti sotto per combattere!"
-        
-        markup = types.InlineKeyboardMarkup()
-        markup.row(
-            types.InlineKeyboardButton("⚔️ Attacca", callback_data=f"raid_atk_{raid.id}"),
-            types.InlineKeyboardButton("✨ Attacco Speciale (60 Aura)", callback_data=f"raid_spc_{raid.id}")
-        )
-
-        if boss.image_url:
-            sent_msg = bot.send_photo(Tecnologia_GRUPPO, boss.image_url, caption=msg_text, parse_mode='Markdown', reply_markup=markup)
-        else:
-            sent_msg = bot.send_message(Tecnologia_GRUPPO, msg_text, parse_mode='Markdown', reply_markup=markup)
-
-        raid.message_id = sent_msg.message_id
-        session.commit()
-        print(f"Spawned Seasonal Boss: {boss.nome}")
-
-    except Exception as e:
-        print(f"Error in auto-spawn: {e}")
-    finally:
-        session.close()
-
-def process_season_end(season):
-    """Calculates top players and announces end of season."""
-    session = Database().Session()
-    try:
-        # 1. Fetch Top 3
-        top_players = session.query(UserSeasonProgress).filter_by(season_id=season.id).order_by(UserSeasonProgress.season_exp.desc()).limit(3).all()
-        
-        msg = f"🏆 **FINE STAGIONE: {season.nome}** 🏆\n\n"
-        msg += "Il tempo è scaduto! Ecco i guerrieri più valorosi di questa stagione che ricevono i premi automatici:\n\n"
-        
-        medals = ["🥇", "🥈", "🥉"]
-        rewards = [5000, 2500, 1000] # Standard rewards
-        
-        for i, prog in enumerate(top_players):
-            user = session.query(Utente).filter_by(id_telegram=prog.user_id).first()
-            if user:
-                premio = rewards[i] if i < len(rewards) else 0
-                user.points += premio
-                msg += f"{medals[i]} **{user.nome}** - {prog.season_exp} XP (+{premio} {PointsName})\n"
-            else:
-                msg += f"{medals[i]} **Guerriero {prog.user_id}** - {prog.season_exp} XP\n"
-        
-        if not top_players:
-            msg += "Nessun gurreiro ha partecipato a questa stagione... che peccato!\n"
-            
-        msg += "\n🎉 Complimenti ai vincitori! I premi sono stati accreditati automaticamente sui vostri account."
-        msg += "\n\nLa stagione è ora **CHIUSA**. Restate sintonizzati per la prossima!"
-        
-        bot.send_message(Tecnologia_GRUPPO, msg, parse_mode='Markdown')
-        
-        # 2. Deactivate
-        season.active = False
-        session.add(season)
-        session.commit()
-    except Exception as e:
-        print(f"Error processing season end: {e}")
-    finally:
-        session.close()
-
-def check_season_expiry():
-    """Checks if the active season has reached its end date."""
-    session = Database().Session()
-    try:
-        active_season = session.query(Season).filter_by(active=True).first()
-        if active_season and active_season.data_fine:
-            if datetime.date.today() >= active_season.data_fine:
-                print(f"Season {active_season.id} expired. Ending it...")
-                process_season_end(active_season)
-    except Exception as e:
-        print(f"Error checking season expiry: {e}")
-    finally:
-        session.close()
-
-    
-
-def addnamegame(message):
-    chatid = message.chat.id
-    utente = Utente().getUtente(chatid)
-    piattaforma,nomegioco = message.text.split()
-    GiocoUtente().CreateGiocoUtente(chatid,piattaforma,nomegioco) 
-    bot.reply_to(message,'Piattaforma e gioco aggiunti',reply_markup=Database().startMarkup(utente))
-
-def extract_link_data(message):
-    if not message:
-        return None, None
-    
-    text = message.caption if message.caption else ""
-    pattern = r't\.me/(?:c/|)([\w\d_]+)/(\d+)'
-    
-    # 1. Check Entities (Hyperlinks)
-    if message.caption_entities:
-        for entity in message.caption_entities:
-            if entity.type == 'text_link':
-                match = re.search(pattern, entity.url)
-                if match: 
-                    chat_id_str, msg_id = match.group(1), int(match.group(2))
-                    return (int("-100" + chat_id_str) if chat_id_str.isdigit() else "@" + chat_id_str), msg_id
-            elif entity.type == 'url':
-                offset = entity.offset
-                length = entity.length
-                url_text = text[offset:offset+length]
-                match = re.search(pattern, url_text)
-                if match:
-                    chat_id_str, msg_id = match.group(1), int(match.group(2))
-                    return (int("-100" + chat_id_str) if chat_id_str.isdigit() else "@" + chat_id_str), msg_id
-
-    # 2. Check Raw Text
-    match = re.search(pattern, text)
-    if match:
-        chat_id_str, msg_id = match.group(1), int(match.group(2))
-        return (int("-100" + chat_id_str) if chat_id_str.isdigit() else "@" + chat_id_str), msg_id
-    
-    return None, None
-
-def sendFileGame(chatid, from_chat, messageid):
-    max_deep = 300
-    tmp = 0
-    # First message target for type check
-    first_msg = None
-    try:
-        # We MUST forward at least once to see what it is
-        first_msg = bot.forward_message(chatid, from_chat, messageid, protect_content=True)
-        if first_msg.content_type == 'sticker': return 1
-    except:
-        return -1
-
-    current_type = first_msg.content_type
-    messageid += 1
-    tmp += 1
-
-    # Keep forwarding while it's the SAME type or compatible
-    while tmp <= max_deep:
-        try:
-            msg = bot.forward_message(chatid, from_chat, messageid, protect_content=True)
-            if msg.content_type == 'sticker':
-                break
-            if current_type != 'photo' and msg.content_type == 'photo':
-                break
-        except:
-            break
-        messageid += 1
-        tmp += 1
-    return 1
-
-def isPremiumChannel(from_chat):
-    premium = False
-    for i in PREMIUM_CHANNELS:
-        if from_chat == int(PREMIUM_CHANNELS[i]):
-            premium = True
-            break
-    return premium
-
-def isMiscellaniaChannel(from_chat):
-    premium = False
-    for i in MISCELLANIA:
-        if from_chat==int(MISCELLANIA[i]): premium = True
-    return premium
-
-def buy1game(message):
-
-    punti = Points.Points()
-    chatid = message.chat.id
-    utenteSorgente  = Utente().getUtente(chatid)
-    from_chat =  message.forward_from_chat.id
-
-    if from_chat is not None:
-        if isPremiumChannel(from_chat):
-            costo = 0 if utenteSorgente.premium == 1 else 50
-        elif isMiscellaniaChannel(from_chat):
-            costo = 5
-        else:
-            costo = 15
-
-        messageid = message.forward_from_message_id
-        
-        if message.content_type=='photo':
-            if costo == 0:
-                # OPTION B: Link Trick
-                link_chat, link_msg = extract_link_data(message)
-                if link_chat:
-                    status = sendFileGame(chatid, link_chat, link_msg)
-                else:
-                    status = sendFileGame(chatid,from_chat,messageid)
-                
-                if status == -1:
-                    bot.reply_to(message,"C'è un problema con questo gioco, contatta un admin")
-            elif utenteSorgente.points>=costo:
-                status = sendFileGame(chatid,from_chat,messageid)
-                if status == -1:
-                    bot.reply_to(message,"C'è un problema con questo gioco, contatta un admin")
-                Database().update_user(chatid, {'points':utenteSorgente.points-costo})
-                bot.reply_to(message, "Hai mangiato "+str(costo)+" "+PointsName+"\n\n"+Utente().infoUser(utenteSorgente),parse_mode='markdown')
-            else:
-                bot.reply_to(message, "Mi dispiace, ti servono "+str(costo)+" "+PointsName+" per comprare questo gioco"+"\n\n"+Utente().infoUser(utenteSorgente),parse_mode='markdown')
-        
-        #bot.send_message(CANALE_LOG,"L'utente "+utenteSorgente.username+" ha acquistato da "+message.forward_from_chat.title+" https://t.me/c/"+str(from_chat)[4:]+"/"+str(messageid))
-
-#bot.infinity_polling()
-
-def inviaLivelli(limite):
-    livelli_normali = Livello().getLevels(premium=0)
-    livelli_premium = Livello().getLevels(premium=1)
-
-    messaggio_normali = 'Livelli disponibili\n\n'
-    for lv in livelli_normali[:limite]:
-        messaggio_normali += '*[' + str(lv.livello) + ']* [' + lv.nome + '](' + lv.link_img + ')\t [' + lv.saga + ']💪 ' + str(lv.exp_to_lv) + ' exp.\n'
-
-    messaggio_premium = 'Livelli disponibili solo per gli Utenti Premium\n\n'
-    for lv in livelli_premium[:limite]:
-        messaggio_premium += '*[' + str(lv.livello) + ']* [' + lv.nome + '](' + lv.link_img + ')\t [' + lv.saga + ']💪 ' + str(lv.exp_to_lv) + ' exp.\n'
-
-    bot.send_message(Tecnologia_GRUPPO, messaggio_normali, parse_mode='markdown')
-    bot.send_message(Tecnologia_GRUPPO, messaggio_premium, parse_mode='markdown')
 
 
 def backup():
@@ -2200,21 +2325,18 @@ def backup():
     bot.send_document(CANALE_LOG, doc, caption="Arseniolupin #database #backup")
     doc.close()
 
-def send_album():
-    punti = Points.Points()
-    msg = punti.album()
-    bot.send_message(Tecnologia_GRUPPO, msg,parse_mode='markdown' )
-
 # Funzione per avviare il programma di promemoria
 def start_reminder_program():
     # Imposta l'orario di esecuzione del promemoria
     schedule.every().day.at("09:00").do(backup)
-    schedule.every().day.at("15:00").do(send_album)
     # Compattazione mensile degli ID (check interno per il primo del mese)
     schedule.every().day.at("00:00").do(compact_db_job)
     
-    # Spawn Boss ogni 4 ore per ravvivare il gruppo
-    schedule.every(4).hours.do(spawn_random_seasonal_boss)
+    # Spawn Boss ogni 4 ore per ravvivare il gruppo (solo Boss di saga)
+    schedule.every(4).hours.do(spawn_random_seasonal_boss, only_boss=True)
+    
+    # Contrattacco Boss ogni 60 secondi
+    schedule.every(60).seconds.do(boss_auto_attack_job)
     
     #schedule.every().day.at("20:00").do(inviaLivelli, 40)
     #schedule.every().monday.at("12:00").do(inviaUtentiPremium)
