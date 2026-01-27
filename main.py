@@ -63,12 +63,12 @@ class BotCommands:
         self.message = message
         self.comandi_privati = {
             "👤 Scegli il personaggio": self.handle_choose_character_v2,
-            
             "Compra abbonamento Premium (1 mese)": self.handle_buy_premium,
             "✖️ Disattiva rinnovo automatico": self.handle_disattiva_abbonamento_premium,
             "✅ Attiva rinnovo automatico": self.handle_attiva_abbonamento_premium,
             "classifica": self.handle_classifica,
             "compro un altro mese": self.handle_buy_another_month,
+            "🎖 Compra abbonamento Premium (1 mese)": self.handle_buy_premium,
             "ℹ️ info": self.handle_info,
             "🎒 Inventario": self.handle_inventario,
             "🛒 Negozio": self.handle_negozio_pozioni,
@@ -77,6 +77,7 @@ class BotCommands:
             "📟 Radar Cercasfere": self.handle_buy_radar,
             "🔋 Cariche Radar": self.handle_buy_radar,
             "📊 ALLOCAZIONE STATISTICHE": self.handle_stats_menu,
+            "🐢 Kame House": self.handle_kamehouse,
             "Indietro": self.handle_back,  
         }
 
@@ -107,6 +108,8 @@ class BotCommands:
             "boss_list": self.handle_boss_list,
             "kill_raid": self.handle_kill_raid,
             "set_adult_img": self.handle_set_adult_img,
+            "set_img": self.handle_set_img,
+            "set_image": self.handle_set_img,
         }
         self.comandi_generici = {
             "!dona": self.handle_dona,
@@ -125,6 +128,7 @@ class BotCommands:
             "!saga": self.handle_saga,
             "/saga": self.handle_saga,
             "/cresci": self.handle_cresci,
+            "/reset_me": self.handle_reset_me,
         }
         try:
             self.chatid = message.from_user.id
@@ -664,17 +668,18 @@ class BotCommands:
             bot.reply_to(self.message, f"❌ Errore: {e}")
 
     def handle_add_mob_adv(self):
-        # /add_mob_adv [LV] [HP_B] [HP_P] [ATK_B] [ATK_P] [XP_B] [XP_P] [SAGA] [NOME...]
+        # /add_mob_adv [LV] [HP_B] [HP_P] [ATK_B] [ATK_P] [XP_B] [XP_P] [PTS_B] [PTS_P] [SAGA] [NOME...]
         args = self.message.text.split()
-        if len(args) < 10:
-            bot.reply_to(self.message, "Usa: `/add_mob_adv [LV] [HP_B] [HP_P] [ATK_B] [ATK_P] [XP_B] [XP_P] [SAGA] [NOME]`", parse_mode='Markdown')
+        if len(args) < 12:
+            bot.reply_to(self.message, "Usa: `/add_mob_adv [LV] [HP_B] [HP_P] [ATK_B] [ATK_P] [XP_B] [XP_P] [PTS_B] [PTS_P] [SAGA] [NOME]`", parse_mode='Markdown')
             return
         try:
             lv = int(args[1]); hp_b = int(args[2]); hp_p = int(args[3])
             atk_b = int(args[4]); atk_p = int(args[5])
             xp_b = int(args[6]); xp_p = int(args[7])
-            saga = args[8].replace("_", " ")
-            nome = " ".join(args[9:])
+            pts_b = int(args[8]); pts_p = int(args[9])
+            saga = args[10].replace("_", " ")
+            nome = " ".join(args[11:])
 
             session = Database().Session()
             new_mob = BossTemplate(
@@ -682,6 +687,7 @@ class BotCommands:
                 hp_base=hp_b, hp_per_lv=hp_p,
                 atk_base=atk_b, atk_per_lv=atk_p,
                 xp_base=xp_b, xp_per_lv=xp_p,
+                points_base=pts_b, points_per_lv=pts_p,
                 is_boss=False
             )
             new_mob.calculate_and_sync_stats()
@@ -731,7 +737,7 @@ class BotCommands:
                 boss.livello = new_lv
                 boss.calculate_and_sync_stats()
                 session.commit()
-                bot.reply_to(self.message, f"📈 **{boss.nome}** aggiornato al Livello **{new_lv}**!\n❤️ HP: {boss.hp_max} | ⚔️ ATK: {boss.atk} | ✨ XP: {boss.xp_reward_total}")
+                bot.reply_to(self.message, f"📈 **{boss.nome}** aggiornato al Livello **{new_lv}**!\n❤️ HP: {boss.hp_max} | ⚔️ ATK: {boss.atk} | ✨ XP: {boss.xp_reward_total} | 💰 {PointsName}: {boss.points_reward_total}")
             else:
                 bot.reply_to(self.message, "❌ Nemico non trovato.")
             session.close()
@@ -862,8 +868,12 @@ class BotCommands:
 
         # 3. Execute Purchase
         try:
-            # Deduct points directly on the session object
-            utente.points -= costo
+            # Deduct points and save to database
+            new_points = utente.points - costo
+            Database().update_user(self.chatid, {'points': new_points})
+            
+            # Update local object for the final info display
+            utente.points = new_points
             
             # Add to Inventory
             # Format: 'Pozione {Type} {Size}'
@@ -1274,6 +1284,13 @@ class BotCommands:
                 msg += f"Il tuo potenziale è ora sbloccato. Continua ad allenarti!"
                 
                 self.bot.reply_to(message, msg)
+                
+                # Logic for Unlocking NEW Characters upon Growth
+                # Example: If Goku grows, unlock Goku (Adult) in collection
+                # We'll assume the character list eventually has an "Adult" version
+                # For now, we just ensure the CURRENT name is in the collection
+                utente.sblocca_pg(utente.nome, session, self.chatid)
+                
                 # Redirect to Info to see new stats
                 self.handle_me()
             else:
@@ -1387,6 +1404,24 @@ class BotCommands:
         except Exception as e:
             self.bot.reply_to(self.message, f"❌ Errore durante la compattazione: {str(e)}")
 
+    def handle_reset_me(self):
+        """Allows a user to completely reset their account."""
+        message = self.message
+        args = message.text.split()
+        
+        if len(args) < 2 or args[1] != "CONFERMO":
+            self.bot.reply_to(message, "⚠️ **ATTENZIONE**: Questo comando cancellerà TUTTI i tuoi progressi (Livello, Oggetti, Statistiche) e non si può annullare.\n\nPer procedere scrivi: `/reset_me CONFERMO`", parse_mode='Markdown')
+            return
+            
+        try:
+            # FIX: Use from_user.id for the user invoking the command
+            user_id = message.from_user.id
+            Database().delete_user_complete(user_id)
+            self.bot.reply_to(message, "♻️ **Account Resettato!**\n\nI tuoi dati sono stati cancellati. Al prossimo messaggio verrai registrato come un nuovo utente e riceverai un nuovo personaggio starter!")
+        except Exception as e:
+            print(f"Error resetting user {user_id}: {e}")
+            self.bot.reply_to(message, "❌ Errore durante il reset.")
+
     def handle_restore(self):
         msg = self.bot.reply_to(self.message,'Inviami il db')
         self.bot.register_next_step_handler(msg,Points.Points().restore)
@@ -1413,14 +1448,16 @@ class BotCommands:
                 multiplier = float(parametri[8]) if len(parametri) > 8 else 3.0
                 cost = int(parametri[9]) if len(parametri) > 9 else 60
                 link_img_adult = parametri[10] if len(parametri) > 10 else None
+                is_starter = (parametri[11].lower() == 'true') if len(parametri) > 11 else False
                 
                 # Update Livello model call
-                exist = session.query(Livello).filter_by(livello=livello, lv_premium=lv_premium).first()
+                exist = session.query(Livello).filter_by(livello=livello, lv_premium=lv_premium, nome=nome).first()
                 if exist is None:
                     new_lv = Livello(
                         livello=livello, nome=nome, exp_to_lv=exp_to_lvl, 
                         link_img=link_img, link_img_adult=link_img_adult, saga=saga, lv_premium=lv_premium,
-                        skill_name=skill_name, skill_multiplier=multiplier, skill_aura_cost=cost
+                        skill_name=skill_name, skill_multiplier=multiplier, skill_aura_cost=cost,
+                        is_starter=is_starter
                     )
                     session.add(new_lv)
                 else:
@@ -1432,6 +1469,7 @@ class BotCommands:
                     exist.skill_name = skill_name
                     exist.skill_multiplier = multiplier
                     exist.skill_aura_cost = cost
+                    exist.is_starter = is_starter
             session.commit()
         except Exception as e:
             session.rollback()
@@ -1465,6 +1503,35 @@ class BotCommands:
                 
         except Exception as e:
             self.bot.reply_to(message, "⚠️ **Formato errato**\nUsa: `/set_adult_img NomePersonaggio;LinkImmagine`")
+
+    def handle_set_img(self):
+        """Admin command to set base variant image: /set_img CharacterName;ImageUrl"""
+        message = self.message
+        try:
+            # Handle both /set_img and /set_image
+            cmd = "/set_image" if "/set_image" in message.text else "/set_img"
+            parametri = message.text.split(cmd)[1].strip()
+            char_name, url = [p.strip() for p in parametri.split(';')]
+            
+            session = Database().Session()
+            try:
+                # Find the level by name
+                lv_obj = session.query(Livello).filter_by(nome=char_name).first()
+                if lv_obj:
+                    lv_obj.link_img = url
+                    session.commit()
+                    self.bot.reply_to(message, f"✅ Immagine Base per **{char_name}** aggiornata!\n🔗 Link: {url}")
+                else:
+                    self.bot.reply_to(message, f"❌ Personaggio '{char_name}' non trovato.")
+            except Exception as e:
+                session.rollback()
+                print(f"Error in set_img DB: {e}")
+                self.bot.reply_to(message, "❌ Errore durante l'aggiornamento del DB.")
+            finally:
+                session.close()
+                
+        except Exception as e:
+            self.bot.reply_to(message, "⚠️ **Formato errato**\nUsa: `/set_img NomePersonaggio;LinkImmagine`")
 
     def handle_plus_minus(self):
         message = self.message
@@ -1528,17 +1595,67 @@ class BotCommands:
         abbonamento.buyPremium(utente)
 
     def handle_choose_character_v2(self):
-        # Handle character selection (v2 fixed)
+        # Handle character selection (v2 fixed to use Collection)
         message = self.message
         utente = Utente().getUtente(self.chatid)
         punti = Points.Points()
-        is_premium = '🎖' in message.text
-        livelli_disponibili = Livello().listaLivelliPremium() if is_premium else Livello().listaLivelliNormali()
+        
+        # Only show levels for characters the user actually owns
+        livelli_disponibili = Livello().listaLivelliSbloccati(utente)
+        
         markup = types.ReplyKeyboardMarkup()
+        # Group by Name to avoid spamming every level (show highest reached or selection)
+        seen_chars = set()
         for livello in livelli_disponibili:
-            markup.add(f"{livello.nome}{'🔓' if utente.livello < livello.livello else ''}")
-        msg = bot.reply_to(message, "Seleziona il tuo personaggio", reply_markup=markup)
+            if livello.nome not in seen_chars:
+                markup.add(f"{livello.nome}")
+                seen_chars.add(livello.nome)
+                
+        msg = bot.reply_to(message, "Seleziona il tuo guerriero dalla tua collezione:", reply_markup=markup)
         self.bot.register_next_step_handler(msg, punti.setCharacter)
+
+    def handle_kamehouse(self):
+        session = Database().Session()
+        try:
+            utente = session.query(Utente).filter_by(id_telegram=self.chatid).first()
+            if not utente:
+                self.bot.reply_to(self.message, "Utente non trovato.")
+                return
+
+            img_kame = "https://mir-s3-cdn-cf.behance.net/project_modules/1400/dd0c0a69578469.5b864c07b31c9.jpg"
+            
+            max_vita = 50 + ((utente.stat_vita or 0) * 10)
+            max_aura = 60 + ((utente.stat_aura or 0) * 5)
+            
+            if not utente.is_resting:
+                utente.is_resting = True
+                session.commit()
+                msg = "🐢 **BENVENUTO ALLA KAME HOUSE!** 🐢\n\n"
+                msg += "Maestro Muten ti ha accolto! Qui puoi riposare e recuperare le tue forze.\n\n"
+                msg += f"❤️ **Vita**: {utente.vita}/{max_vita}\n"
+                msg += f"💙 **Aura**: {utente.aura}/{max_aura}\n\n"
+                msg += "⏱ _Recupererai 2 HP e 2 Aura ogni minuto._"
+            else:
+                msg = "🏠 **SEI NELLA KAME HOUSE** 🏠\n\n"
+                msg += "Ti stai riposando beatamente...\n\n"
+                msg += f"❤️ **Vita**: {utente.vita}/{max_vita}\n"
+                msg += f"💙 **Aura**: {utente.aura}/{max_aura}\n\n"
+                msg += "😴 _Torna tra poco per vedere i progressi!_"
+
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("🚪 Esci dalla Kame House", callback_data="leave_kamehouse"))
+            
+            try:
+                self.bot.send_photo(self.chatid, img_kame, caption=msg, parse_mode='Markdown', reply_markup=markup)
+            except Exception as e_img:
+                print(f"Error sending Kame House photo: {e_img}")
+                self.bot.send_message(self.chatid, msg, parse_mode='Markdown', reply_markup=markup)
+
+        except Exception as e:
+            print(f"Error in handle_kamehouse: {e}")
+            self.bot.reply_to(self.message, "Errore durante l'accesso alla Kame House.")
+        finally:
+            session.close()
 
     def handle_all_commands(self):
         message = self.message
@@ -1570,6 +1687,12 @@ def handle_inline_buttons(call):
     #add_namegame
 
     action = call.data
+
+    if action == "leave_kamehouse":
+        Database().update_user(user_id, {'is_resting': False})
+        bot.answer_callback_query(call.id, "Hai lasciato la Kame House!")
+        bot.edit_message_caption("Hai lasciato la Kame House! Sei pronto a tornare all'avventura.", call.message.chat.id, call.message.message_id)
+        return
 
     if action == "stat_menu":
         # Calculate Points
@@ -2137,6 +2260,11 @@ def handle_inline_buttons(call):
             if (utente_live.vita or 0) <= 0:
                 bot.answer_callback_query(call.id, "💀 Sei K.O.! Devi recuperare vita per combattere.", show_alert=True)
                 return
+                
+            # 0.1 Kame House Check
+            if utente_live.is_resting:
+                bot.answer_callback_query(call.id, "🐢 Sei nella Kame House! Devi uscire per combattere.", show_alert=True)
+                return
 
             # 1. Cooldown Check
             participant = session.query(RaidParticipant).filter_by(raid_id=raid_id, user_id=user_id).first()
@@ -2164,7 +2292,7 @@ def handle_inline_buttons(call):
             multiplier = selected_lv.skill_multiplier if selected_lv else 3.0
             costo_aura = selected_lv.skill_aura_cost if selected_lv else 60
             
-            dmg_base = max(1, stat_danno * 2) # Base dmg calc
+            dmg_base = 10 + (stat_danno * 2) # Base dmg calc (10 + stat*2)
             attack_name = "Attacco"
             crit = False
             
@@ -2318,7 +2446,39 @@ def handle_inline_buttons(call):
         finally:
             session.close()
 
-
+def kamehouse_regen_job():
+    """Background job to heal players in Kame House."""
+    session = Database().Session()
+    try:
+        resting_users = session.query(Utente).filter_by(is_resting=True).all()
+        for u in resting_users:
+            max_vita = 50 + ((u.stat_vita or 0) * 10)
+            max_aura = 60 + ((u.stat_aura or 0) * 5)
+            
+            # Use explicit current values or defaults
+            curr_vita = u.vita if u.vita is not None else 50
+            curr_aura = u.aura if u.aura is not None else 60
+            
+            # Apply regen (+2 per minute)
+            if curr_vita < max_vita:
+                u.vita = min(max_vita, curr_vita + 2)
+            
+            if curr_aura < max_aura:
+                u.aura = min(max_aura, curr_aura + 2)
+            
+            # If full, kick out
+            if (u.vita or 0) >= max_vita and (u.aura or 0) >= max_aura:
+                u.is_resting = False
+                try:
+                    bot.send_message(u.id_telegram, "☀️ **Ti sei riposato a sufficienza!**\nSei tornato in piena forma e hai lasciato la Kame House. Buona fortuna!")
+                except: pass
+            
+        session.commit()
+    except Exception as e:
+        print(f"Error in kamehouse_regen: {e}")
+        session.rollback()
+    finally:
+        session.close()
 
 def backup():
     doc = open('dbz.db', 'rb')
@@ -2337,6 +2497,9 @@ def start_reminder_program():
     
     # Contrattacco Boss ogni 60 secondi
     schedule.every(60).seconds.do(boss_auto_attack_job)
+    
+    # Rigenerazione Kame House ogni 60 secondi
+    schedule.every(60).seconds.do(kamehouse_regen_job)
     
     #schedule.every().day.at("20:00").do(inviaLivelli, 40)
     #schedule.every().monday.at("12:00").do(inviaUtentiPremium)

@@ -107,10 +107,11 @@ class Points:
         utente = Utente().getUtente(message.chat.id)  
         # Pulisci il nome del personaggio da emoji come 🔓 e spazi extra
         char_name = message.text.replace('🔓', '').strip()
+        # Find highest level achieved for THIS character name
         selectedLevel = Livello().GetLevelByNameLevel(char_name)
         if selectedLevel:
-            Livello().setSelectedLevel(utente,selectedLevel.livello,selectedLevel.lv_premium)
-            bot.reply_to(message, f"Personaggio {char_name} selezionato!\n\n{Utente().infoUser(utente)}",parse_mode='markdown',reply_markup=Database.startMarkup(Database,utente))
+            Livello().setSelectedLevel(utente,utente.livello,selectedLevel.lv_premium, char_name=char_name)
+            bot.reply_to(message, f"Guerriero {char_name} selezionato!\n\n{Utente().infoUser(utente)}",parse_mode='markdown',reply_markup=Database.startMarkup(Database,utente))
         else:
             bot.reply_to(message, "Personaggio non trovato.")
         #bot.send_message(CANALE_LOG, "L' utente "+Utente().getUsernameAtLeastName(utente)+" ha selezionato il personaggio "+ message.text +"\n\n"+Utente().infoUser(utente),parse_mode='markdown',reply_markup=Database.startMarkup(Database,utente))
@@ -208,6 +209,7 @@ class Points:
             return "Solo gli amministratori possono aggiungere o rimuovere punti"
 
         # Split del comando in parti, separando l'operazione (+ o -) dai nomi degli utenti
+        parts = message.text.split()
         if not parts: return "Comando vuoto"
         
         token = parts[0]

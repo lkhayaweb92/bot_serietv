@@ -22,6 +22,12 @@ livelli = [0, 300, 800, 1500, 1725, 2335, 2500, 2980, 3760, 4300, 4575, 5525, 65
 31885, 34230, 36710, 39225, 41875, 44560, 47380, 50235, 53225, 56250, 59410, 62605, 65935,70000,75000,80000,85000,90000,95000,100000,105000]
 
 
+class UserCharacter(Base):
+    __tablename__ = "user_character"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('utente.id_Telegram'))
+    character_name = Column(String(32))
+
 class DailyShop(Base):
     __tablename__ = "dailyshop"
     id = Column(Integer, primary_key=True)
@@ -41,16 +47,14 @@ class Database:
 
         markup.add('ℹ️ info','🎒 Inventario','🛒 Negozio')
         if utente is not None:
+            markup.add('👤 Scegli il personaggio', '🐢 Kame House')
             if utente.premium==1:
-                markup.add('👤 Scegli il personaggio','👤 Scegli il personaggio 🎖')
                 markup.add('🎖 Compro un altro mese')
                 if utente.abbonamento_attivo==1:
                     markup.add('✖️ Disattiva rinnovo automatico')
                 else:
-                    
                     markup.add('✅ Attiva rinnovo automatico')
             else:
-                markup.add('👤 Scegli il personaggio')
                 markup.add('🎖 Compra abbonamento Premium (1 mese)')
         markup.add('📄 Classifica')
 
@@ -186,6 +190,12 @@ class Database:
             session.query(Collezionabili).filter_by(id_telegram=str(chatid)).delete()
             # Delete from Domenica (bonus)
             session.query(Domenica).filter_by(utente=chatid).delete()
+            # Delete from UserCharacter (collection)
+            session.query(UserCharacter).filter_by(user_id=chatid).delete()
+            # Delete from UserSeasonProgress
+            session.query(UserSeasonProgress).filter_by(user_id=chatid).delete()
+            # Delete from RaidParticipant (optional, but good for clean slate)
+            session.query(RaidParticipant).filter_by(user_id=chatid).delete()
             
             session.commit()
         except Exception as e:
@@ -273,6 +283,9 @@ class Utente(Base):
     # Character Growth System
     stadio_crescita = Column('stadio_crescita', String, default='bambino')
     data_crescita = Column('data_crescita', DateTime)
+    
+    # Kame House Resting System
+    is_resting = Column('is_resting', Boolean, default=False)
 
     def CreateUser(self,id_telegram,username,name,last_name):
 
@@ -299,6 +312,10 @@ class Utente(Base):
                 utente.stadio_crescita = 'bambino'
                 session.add(utente)
                 session.commit()
+                
+                # Assign Random Starter Character
+                self.assegna_pg_casuale(self, id_telegram, session)
+                
             except:
                 session.rollback()
                 raise
@@ -323,6 +340,32 @@ class Utente(Base):
 
         session.close()
         return utente
+
+    def assegna_pg_casuale(self, id_telegram, session):
+        """Selects a random starter character and adds it to the user's collection."""
+        # Get all starter characters (Lv 1, is_starter=True)
+        starter_lvs = session.query(Livello).filter_by(livello=1, is_starter=True).all()
+        
+        if not starter_lvs:
+            # Fallback if no starters are marked
+            starter_lvs = session.query(Livello).filter_by(livello=1).all()
+            
+        if starter_lvs:
+            chosen = random.choice(starter_lvs)
+            self.sblocca_pg(self, chosen.nome, session, id_telegram)
+            # Set as initial selected level
+            session.query(Utente).filter_by(id_telegram=id_telegram).update({'livello_selezionato': chosen.id})
+            session.commit()
+
+    def sblocca_pg(self, char_name, session, id_telegram):
+        """Adds a character to the user's unlocked collection."""
+        exist = session.query(UserCharacter).filter_by(user_id=id_telegram, character_name=char_name).first()
+        if not exist:
+            new_char = UserCharacter(user_id=id_telegram, character_name=char_name)
+            session.add(new_char)
+            session.commit()
+            return True
+        return False
 
     def verifica_crescita(self):
         """Checks if the character meets growth milestones."""
@@ -432,7 +475,7 @@ class Utente(Base):
             # Aura attualmente è sempre al massimo (non c'è consumo)
             current_aura = utente.aura if utente.aura is not None else 60
             answer += f"💙 *Aura*: {current_aura}/{max_aura}\n"
-            answer += f"⚔️ *Danno*: {(utente.stat_danno or 0) * 2}\n"
+            answer += f"⚔️ *Danno*: {10 + (utente.stat_danno or 0) * 2}\n"
             answer += f"⚡️ *Velocità*: {(utente.stat_velocita or 0)}\n"
             answer += f"🛡️ *Resistenza*: {(utente.stat_resistenza or 0)}% (MAX 75%)\n"
             answer += f"🎯 *Crit Rate*: {(utente.stat_crit_rate or 0)}%\n"
@@ -469,7 +512,7 @@ class Utente(Base):
                 multiplier *= 1.5
                 
             cost = selectedLevel.skill_aura_cost or 60
-            skill_dmg = int((utente.stat_danno or 0) * 2 * multiplier) # Estimated base damage
+            skill_dmg = int((10 + (utente.stat_danno or 0) * 2) * multiplier) # Base (10 + stat*2) * Multiplier
             
             answer += f"\n✨ **Abilità**:\n"
             answer += f"🟣 {skill_name}: {skill_dmg} DMG, {cost} Aura\n"
@@ -663,6 +706,8 @@ class Livello(Base):
     link_img_adult = Column('link_img_adult', String(128)) # Adult variant
     saga = Column('saga',String(128))
     lv_premium = Column('lv_premium',Integer)
+    is_starter = Column('is_starter', Boolean, default=False) # For random assignment
+    is_elite = Column('is_elite', Boolean, default=False)     # Unused for now but good for tiers
     skill_name = Column(String(64), default="Attacco Speciale")
     skill_multiplier = Column(Float, default=3.0)
     skill_aura_cost = Column(Integer, default=60)
@@ -684,9 +729,10 @@ class Livello(Base):
                 livello.nome = nome
                 livello.exp_to_lv = exp_to_lv
                 livello.link_img = link_img
-                livello.link_img_adult = None # Set later
+                livello.link_img_adult = None 
                 livello.saga = saga
                 livello.lv_premium = lv_premium
+                livello.is_starter = False # Default
                 session.add(livello)
                 session.commit()
             except:
@@ -741,18 +787,31 @@ class Livello(Base):
         livello = session.query(Livello).filter_by(nome = nameLevel).first()
         return livello 
 
-    def setSelectedLevel(self,utente,level,lv_premium):
+    def setSelectedLevel(self,utente,level_num,lv_premium, char_name=None):
         session = Database().Session()
-        livello = session.query(Livello).filter_by(livello = level,lv_premium=lv_premium).first()
-        Database().update_user(utente.id_telegram,{'livello_selezionato':livello.id})
+        query = session.query(Livello).filter_by(livello=level_num, lv_premium=lv_premium)
+        if char_name:
+            query = query.filter_by(nome=char_name)
+        
+        livello = query.first()
+        if livello:
+            Database().update_user(utente.id_telegram,{'livello_selezionato':livello.id})
+        session.close()
 
-    def listaLivelliDisponibili(self,utente):
-        livelloAttuale = utente.livello
+    def listaLivelliSbloccati(self, utente):
+        """Returns only levels that correspond to characters in the user's collection."""
         session = Database().Session()
-        if utente.premium==1:
-            livelli = session.query(Livello).filter(Livello.livello<utente.livello).order_by(asc(Livello.livello)).all()
-        else:
-            livelli = session.query(Livello).filter(Livello.livello<utente.livello).filter_by(lv_premium=0).order_by(asc(Livello.livello)).all()
+        # Get character names in collection
+        collection = session.query(UserCharacter).filter_by(user_id=utente.id_telegram).all()
+        char_names = [c.character_name for c in collection]
+        
+        # Get levels for these characters that the user has reached
+        livelli = session.query(Livello).filter(
+            Livello.nome.in_(char_names),
+            Livello.livello <= utente.livello
+        ).order_by(asc(Livello.livello)).all()
+        
+        session.close()
         return livelli
     
     def listaLivelliNormali(self):
@@ -773,6 +832,13 @@ class Livello(Base):
             lbPremiumObj = Livello().getLevelPremium(lv)
             
             if lvObj and lvObj.link_img:
+                # UNLOCK Character in Collection
+                session = Database().Session()
+                try:
+                    Utente().sblocca_pg(lvObj.nome, session, utenteSorgente.id_telegram)
+                finally:
+                    session.close()
+
                 try:
                     # Invia la foto del personaggio sbloccato come complimento nel gruppo
                     msg_text = f"Complimenti! 🎉 Sei passato al livello {lv}! Hai sbloccato il personaggio [{lvObj.nome}]({lvObj.link_img}) 🎉\n\n{Utente().infoUser(utenteSorgente)}"
@@ -784,6 +850,13 @@ class Livello(Base):
                 bot.reply_to(message, f"Complimenti! 🎉 Sei passato al livello {lv}! 🎉\n\n{Utente().infoUser(utenteSorgente)}", parse_mode='markdown')
 
             if lbPremiumObj:
+                # UNLOCK Premium Character in Collection
+                session = Database().Session()
+                try:
+                    Utente().sblocca_pg(lbPremiumObj.nome, session, utenteSorgente.id_telegram)
+                finally:
+                    session.close()
+                    
                 if lbPremiumObj.link_img:
                     try:
                         bot.send_photo(message.chat.id, lbPremiumObj.link_img, caption=f"È anche disponibile il personaggio [{lbPremiumObj.nome}]({lbPremiumObj.link_img}) per gli utenti Premium!", parse_mode='markdown')
@@ -1337,6 +1410,8 @@ class BossTemplate(Base):
     atk_per_lv = Column(Integer, default=4)
     xp_base = Column(Integer, default=50)
     xp_per_lv = Column(Integer, default=20)
+    points_base = Column(Integer, default=20)
+    points_per_lv = Column(Integer, default=10)
     is_elite = Column(Boolean, default=False)
 
     def calculate_and_sync_stats(self):
@@ -1348,16 +1423,19 @@ class BossTemplate(Base):
         h = self.hp_base + (self.livello * self.hp_per_lv)
         a = self.atk_base + (self.livello * self.atk_per_lv)
         x = self.xp_base + (self.livello * self.xp_per_lv)
+        p = (self.points_base or 20) + (self.livello * (self.points_per_lv or 10))
 
         # Elite Multipliers
         if self.is_elite:
             h = int(h * 2.5)  # 2.5x HP
             a = int(a * 2.5)  # 2.5x ATK
             x = int(x * 2.0)  # 2.0x XP Reward
+            p = int(p * 2.0)  # 2.0x Points Reward
 
         self.hp_max = h
         self.atk = a
         self.xp_reward_total = x
+        self.points_reward_total = p
 
 class ActiveRaid(Base):
     __tablename__ = 'active_raid'
@@ -1486,14 +1564,14 @@ def boss_auto_attack_job():
         
         for p in participants:
             u = session.query(Utente).filter_by(id_telegram=p.user_id).first()
-            if u and (u.vita or 0) > 0:
+            if u and (u.vita or 0) > 0 and not u.is_resting:
                 alive_ids.append(p.user_id)
         
         if alive_ids:
             target_id = random.choice(alive_ids)
         else:
-            # Fallback: Random user who has played (XP > 0) AND is alive
-            active_users = session.query(Utente).filter(Utente.exp > 0, Utente.vita > 0).all()
+            # Fallback: Random user who has played (XP > 0) AND is alive AND NOT resting
+            active_users = session.query(Utente).filter(Utente.exp > 0, Utente.vita > 0, Utente.is_resting == False).all()
             if active_users:
                 target_id = random.choice(active_users).id_telegram
 
