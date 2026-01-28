@@ -56,8 +56,6 @@ class Database:
                     markup.add('✅ Attiva rinnovo automatico')
             else:
                 markup.add('🎖 Compra abbonamento Premium (1 mese)')
-        markup.add('📄 Classifica')
-
         return markup
 
     def negozioPozioniMarkup(self, user_id=None):
@@ -462,8 +460,12 @@ class Utente(Base):
         emoji = "👨🏻" if utente.stadio_crescita == 'adulto' else "👦🏻"
         stage_name = utente.stadio_crescita.capitalize()
         answer += f"{emoji} **Stadio**: {stage_name}\n"
+        if utente.is_resting:
+            answer += "💤 **Stato**: In riposo alla Kame House\n"
 
-        answer += f"*👤 {nome_utente}*: {utente.points} {PointsName}\n"
+        # Character Name display
+        char_label = f"**{selectedLevel.nome}**" if selectedLevel else "**Guerriero**"
+        answer += f"👤 {char_label} ({nome_utente}): {utente.points} {PointsName}\n"
         try:
             max_vita = 50 + ((utente.stat_vita or 0) * 10)
             max_aura = 60 + ((utente.stat_aura or 0) * 5)
@@ -478,6 +480,11 @@ class Utente(Base):
             answer += f"⚔️ *Danno*: {10 + (utente.stat_danno or 0) * 2}\n"
             answer += f"⚡️ *Velocità*: {(utente.stat_velocita or 0)}\n"
             answer += f"🛡️ *Resistenza*: {(utente.stat_resistenza or 0)}% (MAX 75%)\n"
+            
+            # DODGE DISPLAY
+            dodge_chance = min(40, (utente.stat_velocita or 0) * 2)
+            answer += f"💨 *Schivata*: {dodge_chance}%\n"
+            
             answer += f"🎯 *Crit Rate*: {(utente.stat_crit_rate or 0)}%\n"
         except Exception as e:
             print(f"ERROR calculating stats in infoUser: {e}")
@@ -516,6 +523,16 @@ class Utente(Base):
             
             answer += f"\n✨ **Abilità**:\n"
             answer += f"🟣 {skill_name}: {skill_dmg} DMG, {cost} Aura\n"
+            
+            # Display Second Skill if Level >= 30
+            if utente.livello >= (selectedLevel.skill2_unlock_lv or 30):
+                s2_name = selectedLevel.skill2_name or "Mossa Finale"
+                s2_mult = selectedLevel.skill2_multiplier or 4.5
+                if utente.stadio_crescita == 'adulto':
+                    s2_mult *= 1.5
+                s2_dmg = int((10 + (utente.stat_danno or 0) * 2) * s2_mult)
+                s2_cost = selectedLevel.skill2_aura_cost or 100
+                answer += f"🔥 {s2_name}: {s2_dmg} DMG, {s2_cost} Aura\n"
         else:
             answer += f"*🎖 Lv. *{utente.livello}\n"
 
@@ -711,6 +728,12 @@ class Livello(Base):
     skill_name = Column(String(64), default="Attacco Speciale")
     skill_multiplier = Column(Float, default=3.0)
     skill_aura_cost = Column(Integer, default=60)
+    
+    # Second Skill (Phase 2)
+    skill2_name = Column(String(64), default="Mossa Finale")
+    skill2_multiplier = Column(Float, default=4.5)
+    skill2_aura_cost = Column(Integer, default=100)
+    skill2_unlock_lv = Column(Integer, default=30)
 
     def getLvByExp(self, exp):
         lv = 0
@@ -1524,7 +1547,8 @@ def spawn_random_seasonal_boss(only_boss=False):
         markup = types.InlineKeyboardMarkup()
         markup.row(
             types.InlineKeyboardButton("⚔️ Attacca", callback_data=f"raid_atk_{raid.id}"),
-            types.InlineKeyboardButton("✨ Attacco Speciale", callback_data=f"raid_spc_{raid.id}")
+            types.InlineKeyboardButton("✨ Speciale", callback_data=f"raid_spc_{raid.id}"),
+            types.InlineKeyboardButton("🔥 Finale", callback_data=f"raid_spc2_{raid.id}")
         )
 
         if boss.image_url:
@@ -1597,17 +1621,30 @@ def boss_auto_attack_job():
             ])
             dmg_mult *= 1.5
             
-        final_dmg = int(base_dmg * dmg_mult)
+        # 4. Dodge/Parry Logic
+        dodge_chance = min(40, (target.stat_velocita or 0) * 2)
+        rolled_dodge = random.randint(1, 100) <= dodge_chance
         
+        final_dmg = int(base_dmg * dmg_mult)
         if is_crit:
             final_dmg *= 2
             attack_name += " **CRITICO**"
 
-        # 4. Apply Damage
+        dodge_msg = ""
+        if rolled_dodge:
+            # 50% chance to dodge completely, 50% to parry (reduce 50%)
+            if random.random() < 0.5:
+                final_dmg = 0
+                dodge_msg = f"\n💨 **{target.nome}** ha schivato l'attacco!"
+            else:
+                final_dmg = int(final_dmg * 0.5)
+                dodge_msg = f"\n🛡️ **{target.nome}** ha parato il colpo, dimezzando i danni!"
+
+        # Apply Damage
         target.vita = max(0, target.vita - final_dmg)
         
         # --- 5. Construct Log ---
-        log_msg = f"👾 **{boss.nome}** lancia {attack_name}!\n💥 **{target.nome}** ha subito **{final_dmg}** danni!"
+        log_msg = f"👾 **{boss.nome}** lancia {attack_name}!\n💥 **{target.nome}** ha subito **{final_dmg}** danni!{dodge_msg}"
         if target.vita <= 0:
             log_msg += f"\n💀 **{target.nome}** è andato K.O.!"
         
@@ -1630,7 +1667,8 @@ def boss_auto_attack_job():
             markup = types.InlineKeyboardMarkup()
             markup.row(
                 types.InlineKeyboardButton("⚔️ Attacca", callback_data=f"raid_atk_{raid.id}"),
-                types.InlineKeyboardButton("✨ Attacco Speciale", callback_data=f"raid_spc_{raid.id}")
+                types.InlineKeyboardButton("✨ Speciale", callback_data=f"raid_spc_{raid.id}"),
+                types.InlineKeyboardButton("🔥 Finale", callback_data=f"raid_spc2_{raid.id}")
             )
             
             if boss.image_url:

@@ -16,12 +16,6 @@ class Points:
         create_table(engine)
         self.Session = sessionmaker(bind=engine)
 
-    def classifica(self):   
-        session = self.Session()
-        utenti = session.query(Utente).order_by(desc(Utente.livello),desc(Utente.points),desc(Utente.premium)).all()
-        session.close()
-        return utenti
-        
     def deleteAccount(self,chatid):
         session = self.Session()
         utente = session.query(Utente).filter_by(id_telegram = chatid).first()  
@@ -94,14 +88,6 @@ class Points:
                 bot.reply_to(message, "Database ripristinato")
         except:
             bot.reply_to(message, "Il db non è corretto")
-
-    def writeClassifica(self,message):
-        utenti = self.classifica()
-        messaggio = ''
-        for i in range(20):
-            if len(utenti)>i:
-                messaggio += f'\n*[{str(i+1)}]* {Utente().infoUser(utenti[i])} \n'
-        bot.reply_to(message, messaggio, parse_mode='markdown')
 
     def setCharacter(self,message):
         utente = Utente().getUtente(message.chat.id)  

@@ -66,7 +66,6 @@ class BotCommands:
             "Compra abbonamento Premium (1 mese)": self.handle_buy_premium,
             "✖️ Disattiva rinnovo automatico": self.handle_disattiva_abbonamento_premium,
             "✅ Attiva rinnovo automatico": self.handle_attiva_abbonamento_premium,
-            "classifica": self.handle_classifica,
             "compro un altro mese": self.handle_buy_another_month,
             "🎖 Compra abbonamento Premium (1 mese)": self.handle_buy_premium,
             "ℹ️ info": self.handle_info,
@@ -116,7 +115,6 @@ class BotCommands:
             "/dona": self.handle_dona,
             "/me": self.handle_me,
             "!status": self.handle_status,
-            "!classifica": self.handle_classifica,
             "!stats": self.handle_stats,
             "!livell": self.handle_livell,
             "!inventario": self.handle_inventario,
@@ -129,6 +127,8 @@ class BotCommands:
             "/saga": self.handle_saga,
             "/cresci": self.handle_cresci,
             "/reset_me": self.handle_reset_me,
+            "/evoca": self.handle_evoca,
+            "/scambia_sfera": self.handle_scambia_sfera,
         }
         try:
             self.chatid = message.from_user.id
@@ -1315,8 +1315,6 @@ class BotCommands:
         except IndexError:
             self.bot.reply_to(self.message, "Usa: !status @username")
 
-    def handle_classifica(self):
-        Points.Points().writeClassifica(self.message)
 
     def handle_stats(self):
         message = self.message
@@ -1421,6 +1419,75 @@ class BotCommands:
         except Exception as e:
             print(f"Error resetting user {user_id}: {e}")
             self.bot.reply_to(message, "❌ Errore durante il reset.")
+
+    def handle_evoca(self):
+        can_summon_shenron = Collezionabili().checkShenron(self.chatid)
+        can_summon_porunga = Collezionabili().checkPorunga(self.chatid)
+        
+        if can_summon_shenron or can_summon_porunga:
+            markup = types.InlineKeyboardMarkup()
+            if can_summon_shenron:
+                markup.add(types.InlineKeyboardButton("🐉 Evoca Shenron 🐉", callback_data="evoca_shenron"))
+            if can_summon_porunga:
+                markup.add(types.InlineKeyboardButton("🐲 Evoca Porunga 🐲", callback_data="evoca_porunga"))
+            
+            self.bot.reply_to(self.message, "✨ Hai riunito le Sfere del Drago! ✨\nCerca di scegliere saggiamente il tuo desiderio...", reply_markup=markup)
+        else:
+            self.bot.reply_to(self.message, "❌ Non hai ancora riunito tutte le 7 Sfere del Drago di un tipo (Shenron o Porunga)!\n\nContinua a cercarle nel gruppo usando il Radar Cercasfere!")
+
+    def handle_scambia_sfera(self):
+        # Syntax: /scambia_sfera "La Sfera del Drago Shenron 1" @username
+        text = self.message.text
+        match = re.search(r'/scambia_sfera ["\'](.*?)["\']\s+(@\w+)', text)
+        if not match:
+            # Try without quotes for simpler names
+            match = re.search(r'/scambia_sfera\s+(.*?)\s+(@\w+)', text)
+        
+        if not match:
+            self.bot.reply_to(self.message, "⚠️ Formato errato. Usa: `/scambia_sfera \"Nome Sfera\" @username`", parse_mode='markdown')
+            return
+
+        sphere_name = match.group(1).strip()
+        target_username = match.group(2).strip().replace("@", "")
+
+        if "Sfera del Drago" not in sphere_name:
+            self.bot.reply_to(self.message, "⚠️ Puoi scambiare solo le Sfere del Drago!")
+            return
+
+        session = Database().Session()
+        try:
+            # 1. Check sender's sphere
+            sphere = session.query(Collezionabili).filter_by(id_telegram=str(self.chatid), oggetto=sphere_name, data_utilizzo=None).first()
+            if not sphere:
+                self.bot.reply_to(self.message, f"❌ Non possiedi {sphere_name} nel tuo inventario.")
+                return
+
+            # 2. Get target user
+            target_user = session.query(Utente).filter_by(username=target_username).first()
+            
+            if not target_user:
+                self.bot.reply_to(self.message, f"❌ Utente @{target_username} non trovato nel database.")
+                return
+            
+            if str(target_user.id_telegram) == str(self.chatid):
+                self.bot.reply_to(self.message, "🤔 Non puoi scambiare una sfera con te stesso!")
+                return
+
+            # 3. Transfer
+            sphere.id_telegram = str(target_user.id_telegram)
+            session.commit()
+
+            self.bot.reply_to(self.message, f"✅ Hai scambiato **{sphere_name}** con @{target_username}!", parse_mode='markdown')
+            try:
+                self.bot.send_message(target_user.id_telegram, f"🎁 {Utente().getUsernameAtLeastName(Utente().getUtente(self.chatid))} ti ha inviato **{sphere_name}**!", parse_mode='markdown')
+            except: pass
+
+        except Exception as e:
+            session.rollback()
+            print(f"Error in handle_scambia_sfera: {e}")
+            self.bot.reply_to(self.message, "❌ Errore durante lo scambio.")
+        finally:
+            session.close()
 
     def handle_restore(self):
         msg = self.bot.reply_to(self.message,'Inviami il db')
@@ -1586,8 +1653,6 @@ class BotCommands:
         bot.reply_to(message, "Ho finito i backup")
 
 
-    def handle_classifica(self):
-        Points.Points().writeClassifica(self.message)
 
     def handle_buy_premium(self):
         abbonamento = Abbonamento()
@@ -1874,15 +1939,16 @@ def handle_inline_buttons(call):
 
     elif action == "evoca_shenron":
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("💰 10000 Fagioli Zen", callback_data="shenron_fagioli"))
-        markup.add(types.InlineKeyboardButton("💪 5000 XP", callback_data="shenron_xp"))
+        markup.add(types.InlineKeyboardButton("💰 Fagioli Zen (300-500)", callback_data="shenron_fagioli"))
+        markup.add(types.InlineKeyboardButton("💪 EXP (300-500)", callback_data="shenron_xp"))
         bot.edit_message_text("🐉 Ciedimi un desiderio, e io te lo esaudirò! Scegline UNO:", call.message.chat.id, call.message.message_id, reply_markup=markup)
 
     elif action == "shenron_fagioli":
         try:
             use_dragon_balls_logic(user_id, 'Shenron')
-            Database().update_user(user_id, {'points': utente.points + 10000})
-            bot.edit_message_text("🐉 Il tuo desiderio è stato esaudito! Hai ricevuto 10000 Fagioli Zen. Addio!", call.message.chat.id, call.message.message_id)
+            regalo = random.randint(300, 500)
+            Database().update_user(user_id, {'points': utente.points + regalo})
+            bot.edit_message_text(f"🐉 Il tuo desiderio è stato esaudito! Hai ricevuto {regalo} Fagioli Zen. Addio!", call.message.chat.id, call.message.message_id)
         except Exception as e:
             print(f"Error in shenron_fagioli: {e}")
             bot.send_message(call.message.chat.id, f"Errore: {e}")
@@ -1890,8 +1956,9 @@ def handle_inline_buttons(call):
     elif action == "shenron_xp":
         try:
             use_dragon_balls_logic(user_id, 'Shenron')
-            Database().update_user(user_id, {'exp': utente.exp + 5000})
-            bot.edit_message_text("🐉 Il tuo desiderio è stato esaudito! Hai ricevuto 5000 XP. Addio!", call.message.chat.id, call.message.message_id)
+            regalo = random.randint(300, 500)
+            Database().update_user(user_id, {'exp': utente.exp + regalo})
+            bot.edit_message_text(f"🐉 Il tuo desiderio è stato esaudito! Hai ricevuto {regalo} XP. Addio!", call.message.chat.id, call.message.message_id)
         except Exception as e:
             print(f"Error in shenron_xp: {e}")
             bot.send_message(call.message.chat.id, f"Errore: {e}")
@@ -2305,10 +2372,35 @@ def handle_inline_buttons(call):
                 utente_live.aura = (utente_live.aura if utente_live.aura is not None else (60 + stat_aura * 5)) - costo_aura
                 
                 # Special Multiplier scales with Aura stat
-                # Base is character multiplier, increases by 0.05 for each point in stat_aura
                 aura_multiplier = multiplier + (stat_aura * 0.05)
                 dmg_base *= aura_multiplier
                 attack_name = skill_name
+            
+            elif mode == "spc2":
+                # Level Check
+                unlock_lv = selected_lv.skill2_unlock_lv or 30
+                if utente_live.livello < unlock_lv:
+                    bot.answer_callback_query(call.id, f"🔒 Ti serve il livello {unlock_lv} per questa mossa!", show_alert=True)
+                    return
+                
+                s2_cost = selected_lv.skill2_aura_cost or 100
+                current_aura = utente_live.aura if utente_live.aura is not None else (60 + stat_aura * 5)
+                if current_aura < s2_cost:
+                    bot.answer_callback_query(call.id, f"❌ Aura insufficiente! Serve {s2_cost}.")
+                    return
+                
+                # Consume Aura
+                utente_live.aura = (utente_live.aura if utente_live.aura is not None else (60 + stat_aura * 5)) - s2_cost
+                
+                # Skill 2 Multiplier + Aura Stat bonus
+                s2_base_mult = selected_lv.skill2_multiplier or 4.5
+                s2_mult = s2_base_mult + (stat_aura * 0.05)
+                
+                if utente_live.stadio_crescita == 'adulto':
+                    s2_mult *= 1.5
+                
+                dmg_base *= s2_mult
+                attack_name = selected_lv.skill2_name or "Mossa Finale"
 
             # Crit Check
             crit_chance = stat_crit # e.g. 50 = 50%
