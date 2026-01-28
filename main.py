@@ -129,6 +129,7 @@ class BotCommands:
             "/reset_me": self.handle_reset_me,
             "/evoca": self.handle_evoca,
             "/scambia_sfera": self.handle_scambia_sfera,
+            "/scambia": self.handle_scambia,
         }
         try:
             self.chatid = message.from_user.id
@@ -1485,9 +1486,81 @@ class BotCommands:
         except Exception as e:
             session.rollback()
             print(f"Error in handle_scambia_sfera: {e}")
-            self.bot.reply_to(self.message, "❌ Errore durante lo scambio.")
+            self.bot.reply_to(message, "❌ Errore durante lo scambio.")
         finally:
             session.close()
+
+    def handle_scambia(self, target_username=None):
+        """Interactive trading: prompts for sphere selection if users are in Kame House."""
+        session = Database().Session()
+        try:
+            utente_sender = session.query(Utente).filter_by(id_telegram=self.chatid).first()
+            if not utente_sender or not utente_sender.is_resting:
+                self.bot.reply_to(self.message, "⚠️ Puoi scambiare sfere solo se sei all'interno della **Kame House**!", parse_mode='Markdown')
+                return
+
+            # Identify target
+            target_user = None
+            if self.message.reply_to_message:
+                target_user = session.query(Utente).filter_by(id_telegram=self.message.reply_to_message.from_user.id).first()
+            elif target_username:
+                target_user = session.query(Utente).filter_by(username=target_username.replace("@", "")).first()
+            
+            if not target_user:
+                if not target_username:
+                    msg = self.bot.reply_to(self.message, "🤝 Con chi vuoi scambiare? Rispondi a un suo messaggio o scrivi il suo @username:")
+                    self.bot.register_next_step_handler(msg, self._handle_scambia_step2)
+                    return
+                else:
+                    self.bot.reply_to(self.message, f"❌ Utente {target_username} non trovato.")
+                    return
+
+            if not target_user.is_resting:
+                self.bot.reply_to(self.message, f"⚠️ @{target_user.username} non è nella Kame House! Entrambi dovete essere lì per scambiare.")
+                return
+
+            if str(target_user.id_telegram) == str(self.chatid):
+                self.bot.reply_to(self.message, "🤔 Non puoi scambiare con te stesso!")
+                return
+
+            # Get sender's spheres
+            spheres = session.query(Collezionabili).filter(
+                Collezionabili.id_telegram == str(self.chatid),
+                Collezionabili.oggetto.like('La Sfera del Drago%'),
+                Collezionabili.data_utilizzo == None
+            ).all()
+
+            if not spheres:
+                self.bot.reply_to(self.message, "❌ Non hai Sfere del Drago da scambiare!")
+                return
+
+            # Show menu
+            markup = types.InlineKeyboardMarkup()
+            # Group by name to show unique spheres
+            unique_spheres = {}
+            for s in spheres:
+                unique_spheres[s.oggetto] = unique_spheres.get(s.oggetto, 0) + 1
+            
+            for s_name, count in unique_spheres.items():
+                # Shorten name for button
+                short_name = s_name.replace("La Sfera del Drago ", "")
+                markup.add(types.InlineKeyboardButton(f"🎁 {short_name} (x{count})", callback_data=f"tr_sel|{s_name}|{target_user.id_telegram}"))
+            
+            self.bot.reply_to(self.message, f"🤝 **SCAMBIO CON @{target_user.username}**\n\nSeleziona la sfera che vuoi inviargli:", parse_mode='Markdown', reply_markup=markup)
+
+        except Exception as e:
+            print(f"Error in handle_scambia: {e}")
+            self.bot.reply_to(self.message, "❌ Errore tecnico durante lo scambio.")
+        finally:
+            session.close()
+
+    def _handle_scambia_step2(self, message):
+        self.message = message
+        text = message.text.strip()
+        if text.startswith("@"):
+            self.handle_scambia(target_username=text)
+        else:
+            self.bot.reply_to(message, "⚠️ Devi specificare l'username con @ (es: @lupin).")
 
     def handle_restore(self):
         msg = self.bot.reply_to(self.message,'Inviami il db')
@@ -1708,6 +1781,7 @@ class BotCommands:
                 msg += "😴 _Torna tra poco per vedere i progressi!_"
 
             markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("🤝 Scambia Sfere", callback_data="trade_start"))
             markup.add(types.InlineKeyboardButton("🚪 Esci dalla Kame House", callback_data="leave_kamehouse"))
             
             try:
@@ -1753,10 +1827,69 @@ def handle_inline_buttons(call):
 
     action = call.data
 
-    if action == "leave_kamehouse":
+    elif action == "leave_kamehouse":
         Database().update_user(user_id, {'is_resting': False})
         bot.answer_callback_query(call.id, "Hai lasciato la Kame House!")
         bot.edit_message_caption("Hai lasciato la Kame House! Sei pronto a tornare all'avventura.", call.message.chat.id, call.message.message_id)
+        return
+
+    elif action == "trade_start":
+        # Initial trigger from button
+        msg = bot.send_message(call.message.chat.id, "🤝 Con chi vuoi scambiare? Scrivi il suo @username:")
+        bot.register_next_step_handler(msg, lambda m: BotCommands(m, bot).handle_scambia(target_username=m.text))
+        return
+
+    elif action.startswith("tr_sel|"):
+        # tr_sel|sphere_name|target_id
+        _, sphere_name, target_id = action.split("|")
+        target_user = Utente().getUtente(target_id)
+        
+        if not target_user or not target_user.is_resting:
+            bot.answer_callback_query(call.id, "⚠️ L'utente non è più nella Kame House!")
+            return
+
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("✅ ACCETTA SCAMBIO", callback_data=f"tr_acc|{sphere_name}|{user_id}"))
+        markup.add(types.InlineKeyboardButton("❌ RIFIUTA", callback_data="tr_den"))
+        
+        try:
+            bot.send_message(target_id, f"🤝 **PROPOSTA DI SCAMBIO**\n\n@{utente.username} vuole regalarti:\n✨ **{sphere_name}**\n\nAccetti?", parse_mode='Markdown', reply_markup=markup)
+            bot.edit_message_text(f"⏳ Richiesta inviata a @{target_user.username}. In attesa di conferma...", call.message.chat.id, call.message.message_id)
+        except:
+            bot.answer_callback_query(call.id, "❌ Impossibile contattare l'utente (forse ha bloccato il bot).")
+        return
+
+    elif action.startswith("tr_acc|"):
+        # tr_acc|sphere_name|sender_id
+        _, sphere_name, sender_id = action.split("|")
+        
+        # Double check Kame House status
+        sender = Utente().getUtente(sender_id)
+        if not utente.is_resting or not sender or not sender.is_resting:
+            bot.answer_callback_query(call.id, "⚠️ Entrambi dovete essere nella Kame House per completare lo scambio!")
+            return
+
+        session = Database().Session()
+        try:
+            sphere = session.query(Collezionabili).filter_by(id_telegram=str(sender_id), oggetto=sphere_name, data_utilizzo=None).first()
+            if sphere:
+                sphere.id_telegram = str(user_id)
+                session.commit()
+                bot.edit_message_text(f"✅ Scambio completato! Hai ricevuto **{sphere_name}**.", call.message.chat.id, call.message.message_id, parse_mode='Markdown')
+                try:
+                    bot.send_message(sender_id, f"✅ @{utente.username} ha accettato lo scambio! **{sphere_name}** è stata trasferita.")
+                except: pass
+            else:
+                bot.edit_message_text("❌ Errore: la sfera non è più disponibile nel mittente.", call.message.chat.id, call.message.message_id)
+        except Exception as e:
+            session.rollback()
+            bot.answer_callback_query(call.id, "Errore tecnico durante lo scambio.")
+        finally:
+            session.close()
+        return
+
+    elif action == "tr_den":
+        bot.edit_message_text("❌ Scambio rifiutato.", call.message.chat.id, call.message.message_id)
         return
 
     if action == "stat_menu":
