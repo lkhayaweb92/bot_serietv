@@ -1,0 +1,6 @@
+csv_to_steam_db.py
+steamcoin.csv
+.venv/*
+__pycache__/*
+settings.py
+dbz.db
