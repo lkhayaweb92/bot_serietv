@@ -22,6 +22,14 @@ livelli = [0, 300, 800, 1500, 1725, 2335, 2500, 2980, 3760, 4300, 4575, 5525, 65
 31885, 34230, 36710, 39225, 41875, 44560, 47380, 50235, 53225, 56250, 59410, 62605, 65935,70000,75000,80000,85000,90000,95000,100000,105000]
 
 
+def draw_bar(current, max_val, length=10):
+    """Generates a visual progress bar using unicode characters."""
+    if max_val <= 0: return "▱" * length
+    filled = int((current / max_val) * length)
+    filled = max(0, min(length, filled))
+    return "▰" * filled + "▱" * (length - filled)
+
+
 class UserCharacter(Base):
     __tablename__ = "user_character"
     id = Column(Integer, primary_key=True)
@@ -65,6 +73,15 @@ class UserAchievement(Base):
     progresso_attuale = Column(Float, default=0.0)
     data_completamento = Column(DateTime)
 
+class MarketListing(Base):
+    __tablename__ = "market_listing"
+    id = Column(Integer, primary_key=True)
+    seller_id = Column(Integer, ForeignKey('utente.id_Telegram'))
+    item_name = Column(String(128))
+    price = Column(Integer)
+    timestamp = Column(DateTime, default=datetime.now)
+    is_active = Column(Boolean, default=True)
+
 class Database:
     def __init__(self):
         engine = create_engine('sqlite:///dbz.db', connect_args={'timeout': 30})
@@ -78,6 +95,7 @@ class Database:
         if utente is not None:
             markup.add('👤 Scegli il personaggio', '🐢 Kame House')
             markup.add('🏆 Obiettivi Saga', '📖 Saga Pass')
+            markup.add('🏪 Mercato') # New Button
         return markup
 
     def negozioPozioniMarkup(self, user_id=None):
@@ -216,6 +234,10 @@ class Database:
             session.query(UserSeasonProgress).filter_by(user_id=chatid).delete()
             # Delete from RaidParticipant (optional, but good for clean slate)
             session.query(RaidParticipant).filter_by(user_id=chatid).delete()
+            # Delete from UserAchievement (Saga objectives)
+            session.query(UserAchievement).filter_by(user_id=chatid).delete()
+            # Delete from MarketListing (Active listings)
+            session.query(MarketListing).filter_by(seller_id=chatid).delete()
             
             session.commit()
         except Exception as e:
@@ -306,6 +328,9 @@ class Utente(Base):
     
     # Kame House Resting System
     is_resting = Column('is_resting', Boolean, default=False)
+    
+    # Generic JSON storage for extra data (e.g. active saga override)
+    misc_data = Column('misc_data', String, default="{}")
 
     def CreateUser(self,id_telegram,username,name,last_name):
 
@@ -561,6 +586,97 @@ class Utente(Base):
 
         return answer
 
+    def get_visual_status(self, utente_obj):
+        """Returns a richly formatted string for /me and the character's image URL."""
+        if not utente_obj:
+            return "L'utente non esiste", None
+
+        # Fetch fresh data from DB
+        utente = self.getUtente(utente_obj.id_telegram)
+        if not utente:
+            return "L'utente non è registrato", None
+
+        # Get Levels and Character info
+        selected_level = Livello().infoLivelloByID(utente.livello_selezionato)
+        
+        import Points
+        rank = Points.Points().getRank(utente)
+        
+        # Determine Title
+        if rank == 1: title = "👑 🆙 Maestro del Livello 🥇"
+        elif rank <= 3: title = "🥈 Gran Maestro 🥋"
+        elif rank <= 10: title = "🥉 Campione Mondiale 🏅"
+        else: title = "🥋 Combattente Z ⚔️"
+
+        # Basic Info
+        nome_display = utente.nome if utente.username is None else utente.username
+        premium_badge = " 🎖 PREMIUM" if (utente.premium or 0) > 0 else ""
+        
+        msg = f"👤 {nome_display} | Lv. {utente.livello}{premium_badge}\n"
+        char_name = selected_level.nome if selected_level else "Guerriero"
+        char_saga = selected_level.saga if selected_level else "Dragon Ball"
+        msg += f"🎭 {char_name} ({char_saga})\n"
+        msg += f"{title}\n\n"
+        
+        # Stats Box
+        msg += "╔═══🕹═══╗\n"
+        
+        # HP/MP Bars
+        max_vita = 50 + ((utente.stat_vita or 0) * 10)
+        max_aura = 60 + ((utente.stat_aura or 0) * 5)
+        
+        current_vita = utente.vita if utente.vita is not None else 50
+        current_aura = utente.aura if utente.aura is not None else 60
+        
+        msg += f"❤️ {draw_bar(current_vita, max_vita)} {current_vita}/{max_vita}\n"
+        msg += f"💙 {draw_bar(current_aura, max_aura)} {current_aura}/{max_aura}\n\n"
+        
+        # Detailed Stats
+        danno = 10 + (utente.stat_danno or 0) * 2
+        res = min(75, (utente.stat_resistenza or 0))
+        crit = (utente.stat_crit_rate or 0)
+        vel = (utente.stat_velocita or 0)
+        
+        msg += f"⚔️ Danno: {danno}\n"
+        msg += f"🛡️ Res: {res}% | 💥 Crit: {crit}% | ⚡️ Vel: {vel}\n\n"
+        
+        # Exp Bar
+        info_next_lv = Livello().infoLivello(utente.livello + 1)
+        next_exp = info_next_lv.exp_to_lv if info_next_lv else (livelli[utente.livello] if utente.livello < len(livelli) else 0)
+        
+        msg += f"📈 Exp: {utente.exp}/{next_exp}\n"
+        msg += f"[{draw_bar(utente.exp, next_exp)}]\n"
+        msg += f"Fagioli : {utente.points}\n\n"
+        
+        # Skills
+        if selected_level:
+            msg += "✨ Abilità:\n"
+            mult = selected_level.skill_multiplier or 3.0
+            if utente.stadio_crescita == 'adulto': mult *= 1.5
+            
+            skill_dmg = int(danno * mult)
+            msg += f"🔮 {selected_level.skill_name}: {skill_dmg} DMG | {selected_level.skill_aura_cost} MP\n"
+            
+            # Second Skill
+            if utente.livello >= (selected_level.skill2_unlock_lv or 30):
+                s2_mult = selected_level.skill2_multiplier or 4.5
+                if utente.stadio_crescita == 'adulto': s2_mult *= 1.5
+                s2_dmg = int(danno * s2_mult)
+                msg += f"🔥 {selected_level.skill2_name}: {s2_dmg} DMG | {selected_level.skill2_aura_cost} MP\n"
+
+        msg += "╚═══🕹═══╝\n"
+        msg += "────────────────────\n"
+        
+        # Kame House Status
+        rest_hp = "+2 HP" if utente.is_resting else "+0 HP"
+        rest_mp = "+2 MP" if utente.is_resting else "+0 MP"
+        msg += f"🛌 Riposo: {rest_hp}/{rest_mp}\n"
+        
+        # Image URL
+        img_url = selected_level.link_img if not (utente.stadio_crescita == 'adulto' and selected_level.link_img_adult) else selected_level.link_img_adult
+        
+        return msg, img_url
+
     def addRandomExp(self,user,message):
         exp = random.randint(1,5)
         self.addExp(user,exp)
@@ -756,6 +872,11 @@ class Livello(Base):
     skill2_multiplier = Column(Float, default=4.5)
     skill2_aura_cost = Column(Integer, default=100)
     skill2_unlock_lv = Column(Integer, default=30)
+    
+    # Transformation Logic
+    is_transformation = Column(Boolean, default=False)
+    base_form_id = Column(Integer, ForeignKey('livello.id'), nullable=True) # Character to revert to
+    aura_drain_rate = Column(Integer, default=0) # Aura lost per job tick (e.g. per minute)
 
     def getLvByExp(self, exp):
         lv = 0
@@ -885,18 +1006,23 @@ class Livello(Base):
                     lbPremiumObj = session.query(Livello).filter_by(livello=i, lv_premium=1).first()
                     
                     # 1. Standard Character Unlock
-                    if lvObj and lvObj.link_img:
-                        Utente().sblocca_pg(lvObj.nome, session, utenteSorgente.id_telegram)
-                        if i == lv: # Only send photo for the FINAL level reached to avoid spam
-                            try:
-                                msg_text = f"Complimenti! 🎉 Sei passato al livello {lv}! Hai sbloccato il personaggio [{lvObj.nome}]({lvObj.link_img}) 🎉\n\n{Utente().infoUser(utenteSorgente)}"
-                                bot.send_photo(message.chat.id, lvObj.link_img, caption=msg_text, parse_mode='markdown', reply_to_message_id=message.message_id)
-                            except:
-                                bot.reply_to(message, f"Complimenti! 🎉 Sei passato al livello {lv}! Hai sbloccato il personaggio [{lvObj.nome}]({lvObj.link_img}) 🎉\n\n{Utente().infoUser(utenteSorgente)}", parse_mode='markdown')
-                        else:
-                            # Just unlock silently or log? Maybe notify if it's a huge jump?
-                            # For now silently unlock intermediate ones
-                            pass
+                    # DISABLED: Characters are now unlocked via Saga Achievements / Season Pass
+                    # if lvObj and lvObj.link_img:
+                    #     Utente().sblocca_pg(lvObj.nome, session, utenteSorgente.id_telegram)
+                    if i == lv and lvObj and lvObj.link_img: # Only send photo for the FINAL level reached to avoid spam
+                        try:
+                            # Modified message to not say "Hai sbloccato" if we are not unlocking, 
+                            # but for now let's keep the notification but maybe change wording or just leave it commented if we don't want to confuse.
+                            # Actually, if we don't unlock, we shouldn't say "Hai sbloccato".
+                            # Let's just notify about the level up.
+                            msg_text = f"Complimenti! 🎉 Sei passato al livello {lv}! \n\n{Utente().infoUser(utenteSorgente)}"
+                            bot.send_photo(message.chat.id, lvObj.link_img, caption=msg_text, parse_mode='markdown', reply_to_message_id=message.message_id)
+                        except:
+                            bot.reply_to(message, f"Complimenti! 🎉 Sei passato al livello {lv}! \n\n{Utente().infoUser(utenteSorgente)}", parse_mode='markdown')
+                    else:
+                        # Just unlock silently or log? Maybe notify if it's a huge jump?
+                        # For now silently unlock intermediate ones
+                        pass
 
                     if lbPremiumObj:
                         # NEW LOGIC: Premium Characters are NOT unlocked automatically anymore.
@@ -1378,6 +1504,8 @@ class ActiveRaid(Base):
     message_id = Column(Integer)
     active = Column(Boolean, default=True)
     last_log = Column(Text)
+    status = Column(String(32), default='ACTIVE') # RECRUITING, ACTIVE
+    start_time = Column(DateTime)
 
 class RaidParticipant(Base):
     __tablename__ = 'raid_participant'
@@ -1430,34 +1558,61 @@ def spawn_random_seasonal_boss(only_boss=False):
             return
 
         # 4. Spawn logic
+        start_t = datetime.datetime.now()
+        
+        # Distinction: BOSS/ELITE -> RECRUITING, MOB -> ACTIVE
+        if boss.is_boss or boss.is_elite:
+            status = 'RECRUITING'
+            start_t += datetime.timedelta(minutes=30)
+            log_init = "⏳ Fase di reclutamento iniziata..."
+            
+            # Message Construction
+            elite_tag = " [ELITE]" if boss.is_elite else ""
+            msg_text = f"🔥 **BOSS RAID: {boss.nome}{elite_tag}** 🔥\n\n"
+            msg_text += f"Un nemico potente è apparso! Preparatevi alla battaglia.\n\n"
+            msg_text += f"📊 Livello: {boss.livello}\n"
+            msg_text += f"⚔️ Inizio: {start_t.strftime('%H:%M:%S')}\n"
+            msg_text += f"⏳ Tempo avvio: 30m\n\n"
+            msg_text += "✍️ Iscrivetevi ora! Se nessuno partecipa, il Boss fuggirà."
+            
+            markup = types.InlineKeyboardMarkup()
+            markup.row(types.InlineKeyboardButton(f"✍️ Iscriviti (0)", callback_data=f"raid_join_PLACEHOLDER"))
+            
+        else:
+            status = 'ACTIVE'
+            log_init = "⚔️ Un nemico selvatico attacca!"
+            
+            # Message Construction
+            msg_text = f"⚠️ **NEMICO: {boss.nome}** ⚠️\n\n"
+            msg_text += f"Un nemico selvatico è apparso! Attaccatelo subito!\n\n"
+            msg_text += f"📊 Livello: {boss.livello}\n"
+            msg_text += f"❤️ Vita: {boss.hp_max}/{boss.hp_max}\n"
+            
+            markup = types.InlineKeyboardMarkup()
+            markup.row(
+                types.InlineKeyboardButton("⚔️ Attacca", callback_data=f"raid_atk_PLACEHOLDER"),
+                types.InlineKeyboardButton("✨ Speciale", callback_data=f"raid_spc_PLACEHOLDER")
+            )
+
         raid = ActiveRaid(
             boss_id=boss.id,
             hp_current=boss.hp_max,
             hp_max=boss.hp_max,
             chat_id=Tecnologia_GRUPPO,
             active=True,
-            last_log="🐉 Il Boss sta osservando i nemici..."
+            last_log=log_init,
+            status=status,
+            start_time=start_t
         )
         session.add(raid)
         session.flush()
 
-        msg_text = f"🔥 **UN NEMICO È APPARSO!** 🔥\n\n"
-        msg_text += f"Un guerriero selvatico è apparso nel gruppo!\n\n"
-        
-        elite_tag = " [ELITE] 🌟" if boss.is_elite else ""
-        msg_text += f"👾 **Boss**: {boss.nome}{elite_tag}\n"
-        msg_text += f"📊 **Livello**: {boss.livello}\n"
-        msg_text += f"❤️ **Salute**: {boss.hp_max}/{boss.hp_max} HP\n"
-        msg_text += f"⚔️ **Danno**: {boss.atk}\n\n"
-        msg_text += f"📜 **Ultima Azione**:\n{raid.last_log}\n\n"
-        msg_text += "⚔️ Sconfiggilo per ottenere ricompense!"
-        
-        markup = types.InlineKeyboardMarkup()
-        markup.row(
-            types.InlineKeyboardButton("⚔️ Attacca", callback_data=f"raid_atk_{raid.id}"),
-            types.InlineKeyboardButton("✨ Speciale", callback_data=f"raid_spc_{raid.id}"),
-            types.InlineKeyboardButton("🔥 Finale", callback_data=f"raid_spc2_{raid.id}")
-        )
+        # Fix Markup Placeholder
+        if status == 'RECRUITING':
+             markup.keyboard[0][0].callback_data = f"raid_join_{raid.id}"
+        else:
+             markup.keyboard[0][0].callback_data = f"raid_atk_{raid.id}"
+             markup.keyboard[0][1].callback_data = f"raid_spc_{raid.id}"
 
         if boss.image_url:
             try:
@@ -1469,7 +1624,7 @@ def spawn_random_seasonal_boss(only_boss=False):
 
         raid.message_id = sent_msg.message_id
         session.commit()
-        print(f"Spawned Seasonal Boss: {boss.nome}")
+        print(f"Spawned Entity: {boss.nome} (Boss:{boss.is_boss})")
 
     except Exception as e:
         print(f"Error in auto-spawn: {e}")
@@ -1483,6 +1638,9 @@ def boss_auto_attack_job():
         # 1. Find Active Raid
         raid = session.query(ActiveRaid).filter_by(active=True, chat_id=Tecnologia_GRUPPO).first()
         if not raid:
+            return
+
+        if raid.status != 'ACTIVE':
             return
 
         boss = session.get(BossTemplate, raid.boss_id)
@@ -1501,13 +1659,11 @@ def boss_auto_attack_job():
         
         if alive_ids:
             target_id = random.choice(alive_ids)
-        else:
-            # Fallback: Random user who has played (XP > 0) AND is alive AND NOT resting
-            active_users = session.query(Utente).filter(Utente.exp > 0, Utente.vita > 0, Utente.is_resting == False).all()
-            if active_users:
-                target_id = random.choice(active_users).id_telegram
-
+        
+        # REMOVED FALLBACK: Boss should only attack involved players
+        
         if not target_id:
+            # Nobody to attack
             return
 
         target = session.query(Utente).filter_by(id_telegram=target_id).first()
@@ -1766,5 +1922,73 @@ def calculate_and_sync_saga_progress(user_id):
         print(f"Error in calculate_and_sync_saga_progress: {e}")
         session.rollback()
         return 0
+    finally:
+        session.close()
+
+def check_raid_start_job():
+    """
+    Checks if any RECRUITING raid has reached its start_time.
+    If participants > 0 -> START BATTLE
+    If participants == 0 -> BOSS ESCAPE
+    """
+    session = Database().Session()
+    try:
+        now = datetime.datetime.now()
+        # Find raids that are RECRUITING and past their start time
+        raids_to_start = session.query(ActiveRaid).filter(
+            ActiveRaid.active == True,
+            ActiveRaid.status == 'RECRUITING',
+            ActiveRaid.start_time <= now
+        ).all()
+        
+        for raid in raids_to_start:
+            participants_count = session.query(RaidParticipant).filter_by(raid_id=raid.id).count()
+            boss = session.get(BossTemplate, raid.boss_id)
+            
+            if participants_count == 0:
+                # BOSS ESCAPE
+                raid.active = False
+                raid.status = 'ESCAPED'
+                msg = f"💨 **IL BOSS È FUGGITO!**\n\nNessun guerriero si è fatto avanti per sfidare {boss.nome}.\nIl nemico si è ritirato nell'ombra..."
+                try:
+                    bot.delete_message(raid.chat_id, raid.message_id)
+                except: pass
+                bot.send_message(raid.chat_id, msg, parse_mode='Markdown')
+            else:
+                # START BATTLE
+                raid.status = 'ACTIVE'
+                raid.last_log = "⚔️ **LA BATTAGLIA È INIZIATA!** ⚔️\nScatenate l'inferno!"
+                
+                # Update Message
+                msg_text = f"⚠️ **BOSS RAID: {boss.nome}** ⚠️\n"
+                msg_text += f"❤️ Vita: {raid.hp_current}/{raid.hp_max}\n"
+                msg_text += f"\n📜 **Ultima Azione**:\n{raid.last_log}"
+                
+                markup = types.InlineKeyboardMarkup()
+                markup.row(
+                    types.InlineKeyboardButton("⚔️ Attacca", callback_data=f"raid_atk_{raid.id}"),
+                    types.InlineKeyboardButton("✨ Speciale", callback_data=f"raid_spc_{raid.id}"),
+                    types.InlineKeyboardButton("🔥 Finale", callback_data=f"raid_spc2_{raid.id}")
+                )
+                
+                try:
+                    bot.edit_message_text(msg_text, raid.chat_id, raid.message_id, reply_markup=markup, parse_mode='Markdown')
+                    
+                    # Tag participants logic could go here
+                    parts = session.query(RaidParticipant).filter_by(raid_id=raid.id).all()
+                    p_names = []
+                    for p in parts:
+                        u = session.query(Utente).filter_by(id_telegram=p.user_id).first()
+                        if u: p_names.append(u.nome)
+                    
+                    bot.send_message(raid.chat_id, f"🔔 **DRIIIN!** La battaglia è iniziata! Guerrieri pronti: {', '.join(p_names)}")
+                    
+                except Exception as e_edit:
+                    print(f"Error starting raid UI: {e_edit}")
+
+        session.commit()
+
+    except Exception as e:
+        print(f"Error in check_raid_start_job: {e}")
     finally:
         session.close()
