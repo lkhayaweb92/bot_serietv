@@ -99,11 +99,9 @@ class ChannelDownloader:
                 source_id = link_channel
                 start_msg_id = link_msg
                 is_redirection = True
-                print(f"[ChannelDownloader] Link found! Target: {source_id}, Msg: {start_msg_id}")
             elif forward_source_id:
                 source_id = forward_source_id
                 start_msg_id = self.message.forward_from_message_id
-                print(f"[ChannelDownloader] Forward found! Source: {source_id}, Msg: {start_msg_id}")
 
             if not source_id or not start_msg_id:
                 return False
@@ -134,8 +132,6 @@ class ChannelDownloader:
                 cost_of_destination = self.get_channel_cost(source_id)
                 # Take the HIGHER price
                 cost = max(cost_of_entry, cost_of_destination)
-
-            print(f"[ChannelDownloader] User: {self.user_id}, Premium: {is_premium_user}, Entry: {forward_source_id}, Dest: {source_id}, Final Cost: {cost}")
 
             # 4. Check Points
             utente = Utente().getUtente(self.user_id)
