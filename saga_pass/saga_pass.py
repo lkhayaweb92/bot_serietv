@@ -62,7 +62,7 @@ class SagaPassHandler:
             
             markup.add(types.InlineKeyboardButton("🎁 Ritira Ricompense", callback_data="pass_claim"))
             markup.add(types.InlineKeyboardButton("📜 Vedi Riscattati", callback_data="pass_history"))
-            markup.add(types.InlineKeyboardButton("⬅️ Indietro", callback_data="main_menu"))
+            markup.add(types.InlineKeyboardButton("⬅️ Indietro", callback_data="profilo_menu"))
             
             self.bot.reply_to(self.message, msg, parse_mode='Markdown', reply_markup=markup)
 

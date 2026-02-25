@@ -1,7 +1,7 @@
 from telebot import types
 from settings import *
 from sqlalchemy         import create_engine
-from model import Livello, Utente, Database, Collezionabili, use_dragon_balls_logic, Season, SeasonTier, UserSeasonProgress, BossTemplate, ActiveRaid, RaidParticipant, spawn_random_seasonal_boss, boss_auto_attack_job, process_season_end, check_season_expiry, check_raid_start_job, DailyShop, AchievementCategory, Achievement, UserAchievement, UserCharacter, MarketListing
+from model import Livello, Utente, Database, Collezionabili, use_dragon_balls_logic, Season, SeasonTier, UserSeasonProgress, BossTemplate, ActiveRaid, RaidParticipant, Dungeon, ActiveDungeon, DungeonParticipant, spawn_random_seasonal_boss, boss_auto_attack_job, check_raid_start_job, DailyShop, AchievementCategory, Achievement, UserAchievement, UserCharacter, MarketListing, Transformation, UserTransformation
 from saga_pass.saga_pass import SagaPassHandler
 from channel_downloader.channel_downloader import ChannelDownloader
 import Points
@@ -66,10 +66,10 @@ class BotCommands:
         # ... comandi mappings cut for brevity in thought but should be included in actual replacement ...
         # (I will include the full dicts to avoid breaking things)
         self.comandi_privati = {
-            "👤 Scegli il personaggio": self.handle_choose_character_v2,
+            "👾 Scegli il personaggio": self.handle_choose_character_v2,
             "🏆 Obiettivi Saga": self.handle_saga,
             "📖 Saga Pass": self.handle_pass,
-            "ℹ️ info": self.handle_info,
+            "👤 Profilo PG": self.handle_info,
             "🎒 Inventario": self.handle_inventario,
             "🛒 Negozio": self.handle_negozio_pozioni,
             "🧪 Pozione Rigenerante": self.handle_buy_potion,
@@ -80,6 +80,7 @@ class BotCommands:
             "🐢 Kame House": self.handle_kamehouse,
             "Indietro": self.handle_back,
             "🏪 Mercato": self.handle_mercato,
+            "🧪 Generatore di Onde Blutz": self.handle_buy_blutz,
         }
 
         self.comandi_admin = {
@@ -108,10 +109,13 @@ class BotCommands:
             "spawn_random": self.handle_spawn_random,
             "boss_list": self.handle_boss_list,
             "kill_raid": self.handle_kill_raid,
+            "set_boss_img": self.handle_set_boss_img,
+            "set_dungeon_img": self.handle_set_dungeon_img,
             "set_adult_img": self.handle_set_adult_img,
             "set_img": self.handle_set_img,
             "set_image": self.handle_set_img,
             "set_saga_active": self.handle_set_saga_active_admin, # DEBUG ONLY
+            "set_pg_img": self.handle_set_pg_img,
         }
         self.comandi_generici = {
             "!dona": self.handle_dona,
@@ -132,9 +136,17 @@ class BotCommands:
             "/reset_me": self.handle_reset_me,
             "/evoca": self.handle_evoca,
             "/scambia_sfera": self.handle_scambia_sfera,
-            "/scambia": self.handle_scambia,
             "/mercato": self.handle_mercato,
             "!mercato": self.handle_mercato,
+            "/dungeon": self.handle_dungeon,
+            "!dungeon": self.handle_dungeon,
+            "🏰 dungeon": self.handle_dungeon,
+            "/spawn_dungeon": self.handle_spawn_dungeon,
+            "/kill_dungeon": self.handle_kill_dungeon,
+            "/crea_luna": self.handle_crea_luna,
+            "!crea_luna": self.handle_crea_luna,
+            "/distruggi_luna": self.handle_distruggi_luna,
+            "!distruggi_luna": self.handle_distruggi_luna,
         }
         
         self.target_id = message.chat.id
@@ -148,22 +160,22 @@ class BotCommands:
                 self.chatid = message.chat.id
     
     def handle_private_command(self):
-        message = self.message
+        msg_text = (self.message.text or self.message.caption or "").lower()
         for command, handler in self.comandi_privati.items():
-            if message.text.lower().startswith(command.lower()):
+            if msg_text.startswith(command.lower()):
                 handler()
                 break
+
     def handle_admin_command(self):
-        message = self.message
-        msg_text = message.text.lower()
+        msg_text = (self.message.text or self.message.caption or "").lower()
         for command, handler in self.comandi_admin.items():
             cmd_lower = command.lower()
             if msg_text.startswith(cmd_lower) or msg_text.startswith("/" + cmd_lower) or msg_text.startswith("!" + cmd_lower):
                 handler()
                 break
+
     def handle_generic_command(self):
-        message = self.message
-        msg_text = message.text.lower()
+        msg_text = (self.message.text or self.message.caption or "").lower()
         for command, handler in self.comandi_generici.items():
             cmd_lower = command.lower()
             if msg_text.startswith(cmd_lower) or msg_text.startswith("/" + cmd_lower) or msg_text.startswith("!" + cmd_lower):
@@ -197,13 +209,36 @@ class BotCommands:
 
         # Dynamic Radar Text
         radar = Collezionabili().getItemByUser(self.chatid, "Radar Cercasfere")
-        if radar:
-            pozioni.append({"nome": "Cariche Radar", "prezzo": 1000, "effetto": "+10 Cariche (Personal 24h, Global 48h Stock)"})
-        else:
-            pozioni.append({"nome": "Radar Cercasfere", "prezzo": 1500, "effetto": "Ottieni il Radar (Personal 24h, Global 48h Stock)"})
+        
+        # Check for Radar cooldown and stock for consistency with keyboard
+        session = Database().Session()
+        show_radar = True
+        if utente and utente.last_radar_purchase:
+            diff = datetime.datetime.now() - utente.last_radar_purchase
+            if diff.total_seconds() < 24 * 3600:
+                show_radar = False
+                
+        r_type = "Cariche Radar" if radar else "Radar Cercasfere"
+        # Stock Check
+        latest_r = session.query(DailyShop).filter_by(id_utente=0, tipo_pozione=r_type).order_by(DailyShop.data.desc()).first()
+        if latest_r and (datetime.date.today() - latest_r.data).days < 2 and latest_r.pozioni_rimanenti <= 0:
+            show_radar = False # Exhausted
+            
+        if show_radar:
+            if radar:
+                pozioni.append({"nome": "Cariche Radar", "prezzo": 1000, "effetto": "+10 Cariche (Personal 24h, Global 48h Stock)"})
+            else:
+                pozioni.append({"nome": "Radar Cercasfere", "prezzo": 1500, "effetto": "Ottieni il Radar (Personal 24h, Global 48h Stock)"})
+
+        # Blutz stock check for consistency
+        blutz_stock = session.query(DailyShop).filter_by(id_utente=0, data=datetime.date.today(), tipo_pozione="Generatore di Onde Blutz").first()
+        if not blutz_stock or blutz_stock.pozioni_rimanenti > 0:
+             pozioni.append({"nome": "Generatore di Onde Blutz", "prezzo": 1500, "effetto": "Crea una Luna Artificiale (1 ora - Global Stock)"})
+
+        session.close()
 
         if not pozioni:
-            msg = "Il negozio è vuoto, prova più tardi"
+            msg = "🛒 **Negozio (Lv. Account " + str(lv) + ")** 🛒\n\n_Le scorte speciali sono esaurite, riprova più tardi!_"
         else:
             msg = f"🛒 **Negozio (Lv. Account {lv})** 🛒\n\n"
             for p in pozioni:
@@ -218,7 +253,8 @@ class BotCommands:
         self.bot.send_message(
             self.target_id,
             msg,
-            reply_markup=keyboard
+            reply_markup=keyboard,
+            parse_mode='Markdown'
         )
 
     def handle_spawn_boss(self):
@@ -476,6 +512,33 @@ class BotCommands:
         finally:
             session.close()
 
+    def handle_set_dungeon_img(self):
+        # Usage: Reply to an image with /set_dungeon_img [dungeon_id]
+        if not self.message.reply_to_message or not self.message.reply_to_message.photo:
+            bot.reply_to(self.message, "⚠️ Devi rispondere a un'immagine!")
+            return
+
+        dungeon_id = 1
+        args = self.message.text.split()
+        if len(args) > 1 and args[1].isdigit():
+            dungeon_id = int(args[1])
+            
+        file_id = self.message.reply_to_message.photo[-1].file_id
+        
+        session = Database().Session()
+        try:
+            dungeon = session.get(Dungeon, dungeon_id)
+            if dungeon:
+                dungeon.image_url = file_id
+                session.commit()
+                bot.reply_to(self.message, f"✅ Immagine del Dungeon {dungeon.nome} (ID {dungeon_id}) aggiornata!")
+            else:
+                bot.reply_to(self.message, "❌ Dungeon non trovato.")
+        except Exception as e:
+            bot.reply_to(self.message, f"❌ Errore: {e}")
+        finally:
+            session.close()
+
     def handle_boss_list(self):
         # !boss_list
         session = Database().Session()
@@ -585,6 +648,27 @@ class BotCommands:
 
         except Exception as e:
             print(f"Error killing raid: {e}")
+            self.bot.reply_to(self.message, f"❌ Errore tecnico: {e}")
+        finally:
+            session.close()
+
+    def handle_kill_dungeon(self):
+        user_id = self.chatid
+        if not Utente().isAdmin(Utente().getUtente(user_id)):
+            return
+
+        session = Database().Session()
+        try:
+            active_dg = session.query(ActiveDungeon).filter_by(is_active=True).first()
+            if not active_dg:
+                self.bot.reply_to(self.message, "❌ Nessun Dungeon attivo da chiudere.")
+                return
+
+            active_dg.is_active = False
+            session.commit()
+            self.bot.reply_to(self.message, "✅ Dungeon chiuso forzatamente.")
+        except Exception as e:
+            print(f"Error in kill_dungeon: {e}")
             self.bot.reply_to(self.message, f"❌ Errore tecnico: {e}")
         finally:
             session.close()
@@ -910,6 +994,152 @@ class BotCommands:
         finally:
             session.close()
 
+    def handle_buy_blutz(self):
+        utente = Utente().getUtente(self.chatid)
+        costo = 1500
+        full_name = "Generatore di Onde Blutz"
+        
+        if utente.points < costo:
+            self.bot.reply_to(self.message, f"❌ Non hai abbastanza Fagioli! Servono {costo}.", reply_markup=Database().negozioPozioniMarkup(self.chatid))
+            return
+
+        session = Database().Session()
+        oggi = datetime.date.today()
+        try:
+            # Global Stock Check
+            daily_shop = session.query(DailyShop).filter_by(id_utente=0, data=oggi, tipo_pozione=full_name).first()
+            if not daily_shop:
+                daily_shop = DailyShop(id_utente=0, data=oggi, tipo_pozione=full_name, pozioni_rimanenti=5) # 5 per giorno
+                session.add(daily_shop)
+                session.commit()
+            
+            if daily_shop.pozioni_rimanenti <= 0:
+                self.bot.reply_to(self.message, f"⛔️ Le scorte di {full_name} sono esaurite per oggi!", reply_markup=Database().negozioPozioniMarkup(self.chatid))
+                return
+
+            u_sess = session.query(Utente).filter_by(id_telegram=self.chatid).first()
+            u_sess.points -= costo
+            
+            # Add to expiry (1 hour)
+            now = datetime.datetime.now()
+            current_expiry = u_sess.artificial_moon_expiry if u_sess.artificial_moon_expiry and u_sess.artificial_moon_expiry > now else now
+            u_sess.artificial_moon_expiry = current_expiry + datetime.timedelta(hours=1)
+            
+            # Decrement Stock
+            daily_shop.pozioni_rimanenti -= 1
+            session.commit()
+            
+            expiry_str = u_sess.artificial_moon_expiry.strftime("%H:%M:%S")
+            msg = f"🧪 **GENERATORE DI ONDE BLUTZ ATTIVATO!** 🧪\n\nHai creato una Luna Artificiale personale.\n✨ Scadenza: oggi alle **{expiry_str}**.\n\nOra puoi scatenare l'Oozaru anche di giorno!"
+            self.bot.reply_to(self.message, msg, parse_mode='Markdown', reply_markup=Database().negozioPozioniMarkup(self.chatid))
+        except Exception as e:
+            session.rollback()
+            print(f"Error buy blutz: {e}")
+            self.bot.reply_to(self.message, "Errore durante l'acquisto.")
+        finally:
+            session.close()
+
+    def handle_set_pg_img(self):
+        # Usage: Reply to an image with /set_pg_img [pg_id]
+        if not self.message.reply_to_message or not self.message.reply_to_message.photo:
+            self.bot.reply_to(self.message, "⚠️ Devi rispondere a un'immagine!")
+            return
+
+        msg_text = self.message.text or self.message.caption or ""
+        pg_id = 0
+        args = msg_text.split()
+        if len(args) > 1 and args[1].isdigit():
+            pg_id = int(args[1])
+        
+        if pg_id == 0:
+             self.bot.reply_to(self.message, "⚠️ Specifica l'ID del personaggio (es: `/set_pg_img 19`).")
+             return
+            
+        file_id = self.message.reply_to_message.photo[-1].file_id
+        
+        session = Database().Session()
+        try:
+            pg = session.get(Livello, pg_id)
+            if pg:
+                pg.link_img = file_id
+                session.commit()
+                self.bot.reply_to(self.message, f"✅ Immagine del Personaggio **{pg.nome}** (ID {pg_id}) aggiornata!")
+            else:
+                self.bot.reply_to(self.message, "❌ Personaggio non trovato.")
+        except Exception as e:
+            self.bot.reply_to(self.message, f"❌ Errore: {e}")
+        finally:
+            session.close()
+
+    def handle_crea_luna(self):
+        utente = Utente().getUtente(self.chatid)
+        curr_lv = Livello().infoLivelloByID(utente.livello_selezionato)
+        
+        # Canonical check: Only specific characters can create the Power Ball
+        can_create = "Vegeta" in curr_lv.nome or "Bardock" in curr_lv.nome
+        if not can_create:
+            self.bot.reply_to(self.message, "❌ Solo guerrieri esperti come Vegeta o Bardock sanno creare una Luna Artificiale con la propria energia!")
+            return
+
+        costo_aura = 200
+        if utente.aura < costo_aura:
+            self.bot.reply_to(self.message, f"⚡ Aura insufficiente! La Power Ball richiede {costo_aura} Aura.")
+            return
+
+        session = Database().Session()
+        try:
+            u_sess = session.query(Utente).filter_by(id_telegram=self.chatid).first()
+            u_sess.aura -= costo_aura
+            
+            # Create Artificial Moon (30 minutes)
+            now = datetime.datetime.now()
+            current_expiry = u_sess.artificial_moon_expiry if u_sess.artificial_moon_expiry and u_sess.artificial_moon_expiry > now else now
+            u_sess.artificial_moon_expiry = current_expiry + datetime.timedelta(minutes=30)
+            
+            session.commit()
+            
+            expiry_str = u_sess.artificial_moon_expiry.strftime("%H:%M:%S")
+            msg = f"🌕 **BOKERETSU!** (Power Ball)\n\n{utente.nome} ha lanciato una sfera di energia nel cielo!\n✨ La Luna Artificiale brillerà fino alle **{expiry_str}**.\n\n_Puoi trasformarti ora!_"
+            self.bot.reply_to(self.message, msg, parse_mode='Markdown')
+        except Exception as e:
+            session.rollback()
+            print(f"Error crea_luna: {e}")
+        finally:
+            session.close()
+
+    def handle_distruggi_luna(self):
+        utente = Utente().getUtente(self.chatid)
+        curr_lv = Livello().infoLivelloByID(utente.livello_selezionato)
+        
+        # Canonical check: Roshi or Piccolo
+        can_destroy = "Muten" in curr_lv.nome or "Piccolo" in curr_lv.nome
+        if not can_destroy:
+            self.bot.reply_to(self.message, "❌ Solo guerrieri capaci di colpi energetici devastanti come il Maestro Muten o Piccolo possono distruggere la Luna!")
+            return
+
+        costo_aura = 150
+        if utente.aura < costo_aura:
+            self.bot.reply_to(self.message, f"⚡ Aura insufficiente! Distruggere la Luna richiede {costo_aura} Aura.")
+            return
+
+        session = Database().Session()
+        try:
+            u_sess = session.query(Utente).filter_by(id_telegram=self.chatid).first()
+            u_sess.aura -= costo_aura
+            
+            # Reset Artificial Moon (set to now)
+            u_sess.artificial_moon_expiry = datetime.datetime.now()
+            
+            session.commit()
+            
+            msg = f"💥 **MESSATSU!**\n\n{utente.nome} ha lanciato un colpo potentissimo verso il cielo, distruggendo la Luna Artificiale!\n🌔 L'oscurità (o la luce del sole) torna a regnare."
+            self.bot.reply_to(self.message, msg, parse_mode='Markdown')
+        except Exception as e:
+            session.rollback()
+            print(f"Error distruggi_luna: {e}")
+        finally:
+            session.close()
+
     def handle_buy_radar(self):
         
         session = Database().Session()
@@ -1000,22 +1230,57 @@ class BotCommands:
         finally:
             session.close()
 
-    def handle_info(self):
+    def handle_info(self, call=None):
         try:
             utente = Utente().getUtente(self.chatid)
-            msg = Utente().infoUser(utente)
+            msg, img_url = Utente().get_visual_status(utente)
             
             markup = types.InlineKeyboardMarkup()
             markup.add(types.InlineKeyboardButton("📊 ALLOCAZIONE STATISTICHE", callback_data="stat_menu"))
+            markup.add(types.InlineKeyboardButton("🔥 TRASFORMAZIONI", callback_data="trans_menu"))
             
-            # Send message with markdown for bold stats
-            self.bot.reply_to(self.message, msg, parse_mode='markdown', reply_markup=markup)
+            can_grow, _ = utente.verifica_crescita()
+            if can_grow:
+                markup.add(types.InlineKeyboardButton("🌟 CRESCI (Disponibile!)", callback_data="trigger_growth"))
+            
+            if call:
+                # Refresh by editing
+                try:
+                    if call.message.content_type == 'photo':
+                        if img_url:
+                            self.bot.edit_message_caption(msg, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode='Markdown')
+                        else:
+                            # Cannot edit photo to text, send new
+                            self.bot.send_message(self.target_id, msg, parse_mode='Markdown', reply_markup=markup)
+                        return
+                    else:
+                        if not img_url:
+                            self.bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode='Markdown')
+                        else:
+                            # Cannot edit text to photo, send new
+                            self.bot.send_photo(self.target_id, img_url, caption=msg, parse_mode='Markdown', reply_markup=markup)
+                        return
+                except:
+                    pass
+
+            # Fallback to sending new
+            if img_url:
+                try:
+                    self.bot.send_photo(self.target_id, img_url, caption=msg, parse_mode='Markdown', reply_markup=markup)
+                except Exception as e:
+                    print(f"Error sending photo in handle_info: {e}")
+                    self.bot.send_message(self.target_id, msg, parse_mode='Markdown', reply_markup=markup)
+            else:
+                self.bot.send_message(self.target_id, msg, parse_mode='Markdown', reply_markup=markup)
         except Exception as e:
             print(f"ERROR in handle_info: {e}")
-            # Fallback without markdown
-            self.bot.reply_to(self.message, msg, reply_markup=markup)
+            if call:
+                try: self.bot.answer_callback_query(call.id, "Errore nel caricamento del profilo.")
+                except: pass
+            else:
+                self.bot.reply_to(self.message, "Errore nel caricamento del profilo.")
 
-    def handle_stats_menu(self):
+    def handle_stats_menu(self, call=None):
         utente = Utente().getUtente(self.chatid)
         
         # Calculate Points
@@ -1058,13 +1323,24 @@ class BotCommands:
             )
         
         markup.add(types.InlineKeyboardButton("🔄 Reset Statistiche (500 Fagioli)", callback_data="stat_reset"))
-
-        # Growth Button
+        
         can_grow, _ = utente.verifica_crescita()
         if can_grow:
             markup.add(types.InlineKeyboardButton("🌟 CRESCI (Disponibile!)", callback_data="trigger_growth"))
 
-        self.bot.send_message(self.target_id, msg, reply_markup=markup)
+        markup.add(types.InlineKeyboardButton("🔙 Ritorna al Profilo", callback_data="profilo_menu"))
+
+        if call:
+            try:
+                if call.message.content_type == 'photo':
+                    self.bot.edit_message_caption(msg, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode='Markdown')
+                else:
+                    self.bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode='Markdown')
+                return
+            except:
+                pass
+        
+        self.bot.send_message(self.target_id, msg, reply_markup=markup, parse_mode='Markdown')
 
     def handle_back(self):
         utente = Utente().getUtente(self.chatid)
@@ -1161,13 +1437,38 @@ class BotCommands:
         # Invia un messaggio di conferma all'utente che ha inviato il comando
         self.bot.reply_to(message, 'Messaggio inviato a tutti gli utenti')
 
-    def handle_status(self):
+    def handle_status(self, call=None):
         utente = Utente().getUtente(self.chatid)
         msg, img_url = Utente().get_visual_status(utente)
         
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("📊 ALLOCAZIONE STATISTICHE", callback_data="stat_menu"))
+        markup.row(
+             types.InlineKeyboardButton("🔥 TRASFORMAZIONI", callback_data="trans_menu")
+        )
         
+        can_grow, _ = utente.verifica_crescita()
+        if can_grow:
+            markup.add(types.InlineKeyboardButton("🌟 CRESCI (Disponibile!)", callback_data="trigger_growth"))
+        
+        if call:
+            # Refresh by editing
+            try:
+                if call.message.content_type == 'photo':
+                    if img_url:
+                        self.bot.edit_message_caption(msg, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode='Markdown')
+                    else:
+                        self.bot.send_message(self.target_id, msg, parse_mode='Markdown', reply_markup=markup)
+                    return
+                else:
+                    if not img_url:
+                        self.bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode='Markdown')
+                    else:
+                        self.bot.send_photo(self.target_id, img_url, caption=msg, parse_mode='Markdown', reply_markup=markup)
+                    return
+            except:
+                pass
+
         if img_url:
             try:
                 self.bot.send_photo(self.target_id, img_url, caption=msg, parse_mode='Markdown', reply_markup=markup)
@@ -1343,9 +1644,17 @@ class BotCommands:
             
             if len(markup.keyboard) == 0:
                  markup.add(types.InlineKeyboardButton("🔒 Nessuna Saga Sbloccata (Livello troppo basso)", callback_data="none"))
+            
+            markup.add(types.InlineKeyboardButton("🔙 Ritorna al Profilo", callback_data="profilo_menu"))
 
             if call:
-                 self.bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, parse_mode='Markdown', reply_markup=markup)
+                try:
+                    if call.message.content_type == 'photo':
+                        self.bot.edit_message_caption(msg, call.message.chat.id, call.message.message_id, parse_mode='Markdown', reply_markup=markup)
+                    else:
+                        self.bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, parse_mode='Markdown', reply_markup=markup)
+                except:
+                    self.bot.send_message(self.target_id, msg, parse_mode='Markdown', reply_markup=markup)
             else:
                  self.bot.reply_to(self.message, msg, parse_mode='Markdown', reply_markup=markup)
 
@@ -1473,7 +1782,14 @@ class BotCommands:
             msg_text = "👤 **Scegli il tuo Personaggio**\nSeleziona il guerriero con cui vuoi combattere:"
             
             if call:
-                self.bot.edit_message_text(msg_text, call.message.chat.id, call.message.message_id, parse_mode='Markdown', reply_markup=markup)
+                try:
+                    if call.message.content_type == 'photo':
+                        self.bot.edit_message_caption(msg_text, call.message.chat.id, call.message.message_id, parse_mode='Markdown', reply_markup=markup)
+                    else:
+                        self.bot.edit_message_text(msg_text, call.message.chat.id, call.message.message_id, parse_mode='Markdown', reply_markup=markup)
+                except Exception as e:
+                    if "message is not modified" not in str(e):
+                        print(f"Error editing message in handle_choose_character_v2: {e}")
             else:
                 self.bot.reply_to(self.message, msg_text, parse_mode='Markdown', reply_markup=markup)
 
@@ -1496,6 +1812,12 @@ class BotCommands:
             utente = session.query(Utente).filter_by(id_telegram=self.chatid).first()
             if not utente:
                 self.bot.reply_to(self.message, "Utente non trovato.")
+                return
+
+            # Check if user is transformed
+            curr_lv = session.get(Livello, utente.livello_selezionato)
+            if curr_lv and curr_lv.is_transformation:
+                self.bot.reply_to(self.message, "❌ Non puoi entrare nella Kame House mentre sei trasformato! Torna alla forma base prima di riposare.")
                 return
 
             img_kame = "https://mir-s3-cdn-cf.behance.net/project_modules/1400/dd0c0a69578469.5b864c07b31c9.jpg"
@@ -1657,8 +1979,188 @@ class BotCommands:
         text = message.text.strip()
         if text.startswith("@"):
             self.handle_scambia(target_username=text)
+
+    def handle_dungeon(self, call=None):
+        user_id = self.chatid
+        session = Database().Session()
+        try:
+            # 1. Check for active group dungeon
+            active_dg = session.query(ActiveDungeon).filter_by(is_active=True).first()
+            if not active_dg:
+                is_admin = Utente().isAdmin(Utente().getUtente(user_id))
+                if is_admin:
+                    # Provide spawn list directly for admin
+                    session.close()
+                    return self.handle_spawn_dungeon()
+                
+                msg = "🏰 **SISTEMA DUNGEON** 🏰\n\nIl portale è chiuso. Un Admin deve attivare la sfida!"
+                
+                if call:
+                    try:
+                        if call.message.content_type == 'photo':
+                            self.bot.edit_message_caption(msg, call.message.chat.id, call.message.message_id, parse_mode='Markdown')
+                        else:
+                            self.bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, parse_mode='Markdown')
+                    except:
+                        self.bot.send_message(self.target_id, msg, parse_mode='Markdown')
+                else: self.bot.send_message(self.target_id, msg, parse_mode='Markdown')
+                return
+
+            # 2. Check if user is already a participant
+            participant = session.query(DungeonParticipant).filter_by(active_dungeon_id=active_dg.id, user_id=user_id).first()
+            
+            if participant:
+                if not participant.is_alive:
+                    self.bot.answer_callback_query(call.id if call else None, "💀 Sei esausto e non puoi più combattere in questo Dungeon.", show_alert=True)
+                    return
+                # Show battlefield with personal focus if requested
+                self._show_group_dungeon_battle(active_dg, session, call, participant_viewing=participant)
+            else:
+                # User wants to join
+                dungeon = session.get(Dungeon, active_dg.dungeon_id)
+                msg = f"🏰 **EVENTO DUNGEON: {dungeon.nome}** 🏰\n\n"
+                msg += f"{dungeon.descrizione}\n\n"
+                msg += f"📍 Stanza Attuale: {active_dg.stanza_attuale} / {dungeon.num_stanze}\n"
+                msg += f"⚠️ Entrare costa 1 **Chiave del Dungeon**.\n"
+                
+                markup = types.InlineKeyboardMarkup()
+                if active_dg.is_open:
+                    markup.add(types.InlineKeyboardButton("🔑 Usa Chiave ed Entra", callback_data=f"dg_join_{active_dg.id}"))
+                else:
+                    msg += "\n🔒 Le iscrizioni sono chiuse per questo dungeon."
+                
+                if call:
+                    try:
+                        if call.message.content_type == 'photo':
+                            self.bot.edit_message_caption(msg, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode='Markdown')
+                        else:
+                            self.bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode='Markdown')
+                    except:
+                        self.bot.send_message(self.target_id, msg, reply_markup=markup, parse_mode='Markdown')
+                else: self.bot.send_message(self.target_id, msg, reply_markup=markup, parse_mode='Markdown')
+        
+        except Exception as e:
+            print(f"Error in handle_dungeon: {e}")
+        finally:
+            session.close()
+
+    def handle_spawn_dungeon(self):
+        user_id = self.chatid
+        if not Utente().isAdmin(Utente().getUtente(user_id)):
+            return
+
+        session = Database().Session()
+        try:
+            # Check for existing active dungeon
+            if session.query(ActiveDungeon).filter_by(is_active=True).first():
+                self.bot.reply_to(self.message, "❌ C'è già un Dungeon attivo!")
+                return
+
+            dungeons = session.query(Dungeon).all()
+            if not dungeons:
+                self._seed_dungeons(session)
+                dungeons = session.query(Dungeon).all()
+
+            msg = "🛠 **ADMIN: SPAWN DUNGEON** 🛠\nSeleziona il dungeon da aprire al gruppo:"
+            markup = types.InlineKeyboardMarkup()
+            for d in dungeons:
+                markup.add(types.InlineKeyboardButton(f"🚩 {d.nome}", callback_data=f"dg_spawn_id_{d.id}"))
+            
+            self.bot.send_message(self.target_id, msg, reply_markup=markup, parse_mode='Markdown')
+        finally:
+            session.close()
+
+    def _seed_dungeons(self, session):
+        # Initial seeding of dungeons if empty
+        d1 = Dungeon(
+            nome="Torre di Karin", 
+            descrizione="Un addestramento per scalatori. Nemici semplici.",
+            livello_richiesto=1,
+            num_stanze=3,
+            ricompensa_wumpa=200,
+            ricompensa_exp=100,
+            difficolta=0.8
+        )
+        d2 = Dungeon(
+            nome="Palazzo del Supremo", 
+            descrizione="Sfida la gravità e i servitori del Supremo.",
+            livello_richiesto=15,
+            num_stanze=5,
+            ricompensa_wumpa=500,
+            ricompensa_exp=250,
+            difficolta=1.2
+        )
+        session.add_all([d1, d2])
+        session.commit()
+
+    def _show_group_dungeon_battle(self, active_dg, session, call=None, participant_viewing=None):
+        dungeon = session.get(Dungeon, active_dg.dungeon_id)
+        
+        # Room progress bar
+        prog_bar = "🟦" * (active_dg.stanza_attuale-1) + "⚔️" + "⬜️" * (dungeon.num_stanze - active_dg.stanza_attuale)
+        
+        msg = f"🏰 **BATTLEFIELD: {dungeon.nome}** 🏰\n"
+        msg += f"📍 Stanza {active_dg.stanza_attuale} / {dungeon.num_stanze}\n"
+        msg += f"[{prog_bar}]\n\n"
+        
+        msg += f"👾 **BOSS**: {active_dg.enemy_name or 'Mostro'}\n"
+        hp_blocks = 10
+        hp_filled = int(round(hp_blocks * active_dg.enemy_hp / active_dg.enemy_max_hp)) if active_dg.enemy_max_hp > 0 else 0
+        hp_bar = "🟥" * hp_filled + "⬜️" * (hp_blocks - hp_filled)
+        msg += f"❤️ Boss HP: {hp_bar} ({active_dg.enemy_hp}/{active_dg.enemy_max_hp})\n\n"
+        
+        # Participant List
+        participants = session.query(DungeonParticipant).filter_by(active_dungeon_id=active_dg.id).all()
+        msg += f"👥 **EROI ({len(participants)})**:\n"
+        for p in participants:
+            u = session.query(Utente).filter_by(id_telegram=p.user_id).first()
+            if not u: continue
+            
+            status_icon = "👤" if p.is_alive else "💀"
+            max_p_hp = 50 + u.stat_vita * 10
+            max_p_aura = 60 + u.stat_aura * 5
+            hp_perc = int((p.hp_attuale / max_p_hp) * 100) if max_p_hp > 0 else 0
+            
+            # Highlight the person who is viewing if it's a private view or personal status
+            is_me = " (Tu)" if participant_viewing and participant_viewing.user_id == p.user_id else ""
+            msg += f"{status_icon} **{u.nome}**{is_me}: {p.hp_attuale}/{max_p_hp} HP | {p.aura_attuale}/{max_p_aura} Aura\n"
+            
+        msg += f"\n📜 **REGISTRO BATTAGLIA**:\n_{active_dg.last_log or 'In attesa di azioni...'}_"
+        
+        markup = types.InlineKeyboardMarkup()
+        # Row 1: Combat Actions
+        markup.row(
+            types.InlineKeyboardButton("⚔️ Attacco", callback_data=f"dg_atk_{active_dg.id}"),
+            types.InlineKeyboardButton("✨ Speciale (40 Aura)", callback_data=f"dg_spc_{active_dg.id}")
+        )
+        # Row 2: Items and Refresh
+        markup.row(
+            types.InlineKeyboardButton("🧪 Pozione", callback_data=f"dg_items_{active_dg.id}"),
+            types.InlineKeyboardButton("🔄 Refresh", callback_data=f"dg_refresh_{active_dg.id}")
+        )
+        # Row 3: Utility
+        markup.row(
+            types.InlineKeyboardButton("🏳️ Esci dal Dungeon", callback_data=f"dg_surrender_{active_dg.id}")
+        )
+
+        if dungeon.image_url:
+            try:
+                if call:
+                    self.bot.edit_message_caption(msg, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode='Markdown')
+                else:
+                    self.bot.send_photo(self.target_id, dungeon.image_url, caption=msg, parse_mode='Markdown', reply_markup=markup)
+            except Exception as e_img:
+                print(f"Error in dungeon image view: {e_img}")
+                if call: self.bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode='Markdown')
+                else: self.bot.send_message(self.target_id, msg, reply_markup=markup, parse_mode='Markdown')
         else:
-            self.bot.reply_to(message, "⚠️ Devi specificare l'username con @ (es: @lupin).")
+            if call:
+                try: self.bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode='Markdown')
+                except Exception as e:
+                    if "message is not modified" not in str(e):
+                        self.bot.send_message(call.message.chat.id, msg, reply_markup=markup, parse_mode='Markdown')
+            else:
+                self.bot.send_message(self.target_id, msg, reply_markup=markup, parse_mode='Markdown')
 
     # --- Market System ---
     def handle_mercato(self):
@@ -1667,7 +2169,7 @@ class BotCommands:
         markup.row(types.InlineKeyboardButton("💰 Vendi Oggetto", callback_data="market_sell_start"))
         markup.row(types.InlineKeyboardButton("📉 Vedi Offerte (Compra)", callback_data="market_buy_list"))
         markup.row(types.InlineKeyboardButton("📦 Le Mie Vendite", callback_data="market_manage"))
-        markup.row(types.InlineKeyboardButton("⬅️ Indietro", callback_data="main_menu"))
+        markup.row(types.InlineKeyboardButton("⬅️ Indietro", callback_data="profilo_menu"))
         
         msg = "🏪 **MERCATO GLOBALE** 🏪\n\n"
         msg += "Benvenuto al mercato! Qui puoi vendere i tuoi oggetti o fare affari comprando da altri giocatori.\n"
@@ -1846,7 +2348,9 @@ class BotCommands:
             # 3. Add Item to Buyer Inventory
             new_item = Collezionabili(
                 id_telegram=str(user_id),
-                oggetto=listing.item_name
+                oggetto=listing.item_name,
+                data_acquisizione=datetime.datetime.now(),
+                quantita=1
             )
             session.add(new_item)
             
@@ -1883,7 +2387,9 @@ class BotCommands:
             # Return Item
             returned_item = Collezionabili(
                 id_telegram=str(user_id),
-                oggetto=listing.item_name
+                oggetto=listing.item_name,
+                data_acquisizione=datetime.datetime.now(),
+                quantita=1
             )
             session.add(returned_item)
             
@@ -2009,17 +2515,51 @@ class BotCommands:
         except Exception as e:
             self.bot.reply_to(self.message, f"Errore: {e}")
 
-    def handle_me(self):
+    def handle_me(self, call=None):
         # /me check personal status
-        self.handle_status()
+        self.handle_status(call=call)
 
     def handle_livell(self):
         # !livell -> Shows level info?
         pass
 
     def handle_cresci(self):
-        # /cresci -> Grow up?
-        self.bot.reply_to(self.message, "Devi salire di livello per crescere!")
+        """Processes the growth transition from Child to Adult."""
+        session = Database().Session()
+        try:
+            utente = session.query(Utente).filter_by(id_telegram=self.chatid).first()
+            if not utente:
+                self.bot.reply_to(self.message, "Utente non trovato.")
+                return
+
+            can_grow, msg_err = utente.verifica_crescita()
+            if not can_grow:
+                self.bot.reply_to(self.message, f"❌ {msg_err}")
+                return
+
+            if utente.applica_crescita(session):
+                session.commit()
+                msg = "🌟 **COMPLIMENTI! SEI CRESCIUTO!** 🌟\n\n"
+                msg += f"**{utente.nome}** ha raggiunto la maturità ed è ora un guerriero **ADULTO**!\n\n"
+                msg += "📈 **Bonus Crescita Ricevuti**:\n"
+                msg += "❤️ +100 HP Massimi\n"
+                msg += "💙 +25 Aura Massima\n"
+                msg += "⚔️ +4 Danno Base\n\n"
+                msg += "Ora puoi sbloccare trasformazioni più potenti!"
+                
+                img_vittoria = "https://static.wikia.nocookie.net/dragonball/images/5/5b/GokuAdultTag.png"
+                try:
+                    self.bot.send_photo(self.target_id, img_vittoria, caption=msg, parse_mode='Markdown')
+                except:
+                    self.bot.send_message(self.target_id, msg, parse_mode='Markdown')
+            else:
+                self.bot.reply_to(self.message, "❌ Si è verificato un errore durante la crescita.")
+
+        except Exception as e:
+            print(f"Error in handle_cresci: {e}")
+            self.bot.reply_to(self.message, "❌ Erre durante la crescita.")
+        finally:
+            session.close()
 
     def handle_reset_me(self):
         # /reset_me (Danger zone)
@@ -2076,8 +2616,8 @@ class BotCommands:
             if downloader.handle_forward():
                 return
 
-        # 2. Safety Fix: Ignore messages without text (stickers, photos, etc.) unless they were forwards handled above
-        if not message.text:
+        # 2. Safety Fix: Ignore messages without text or caption
+        if not message.text and not message.caption:
             return
 
         utente = Utente().getUtente(self.chatid)
@@ -2143,39 +2683,54 @@ def process_season_end(season):
         season.active = False
         session.add(season)
         
-        # 3. AUTO-RESTART: Create New Season
+        # 3. AUTO-RESTART: Advance to Next Season or Create New One
         today = datetime.date.today()
         next_month = today + datetime.timedelta(days=30)
-        new_season_num = season.numero + 1
+        next_num = season.numero + 1
         
-        new_season = Season(
-            numero=new_season_num,
-            nome=f"Stagione {new_season_num} - Ciclo Temporale",
-            data_inizio=today,
-            data_fine=next_month,
-            active=True
-        )
-        session.add(new_season)
-        session.flush() # Get ID
+        # Check if the next season already exists in the database
+        next_season = session.query(Season).filter_by(numero=next_num).first()
         
-        # Clone Tiers from previous season (Optional but good for consistency)
-        old_tiers = session.query(SeasonTier).filter_by(season_id=season.id).all()
-        for t in old_tiers:
-            new_tier = SeasonTier(
-                season_id=new_season.id,
-                livello=t.livello,
-                exp_richiesta=t.exp_richiesta,
-                ricompensa_free_valore=t.ricompensa_free_valore,
-                ricompensa_premium_valore=t.ricompensa_premium_valore
+        if next_season:
+            print(f"Found existing Season {next_num}: {next_season.nome}. Activating...")
+            next_season.active = True
+            next_season.data_inizio = today
+            next_season.data_fine = next_month
+            # We don't need to add it to session if it was returned by query
+        else:
+            print(f"Next Season {next_num} not found. Creating generic one...")
+            next_season = Season(
+                numero=next_num,
+                nome=f"Stagione {next_num} - Ciclo Temporale",
+                data_inizio=today,
+                data_fine=next_month,
+                active=True
             )
-            session.add(new_tier)
+            session.add(next_season)
+        
+        session.flush() # Ensure ID is available
+        
+        # Clone Tiers from previous season ONLY IF next_season has no tiers
+        tiers_count = session.query(SeasonTier).filter_by(season_id=next_season.id).count()
+        if tiers_count == 0:
+            print(f"Cloning tiers from Season {season.id} to Season {next_season.id}")
+            old_tiers = session.query(SeasonTier).filter_by(season_id=season.id).all()
+            for t in old_tiers:
+                new_tier = SeasonTier(
+                    season_id=next_season.id,
+                    livello=t.livello,
+                    exp_richiesta=t.exp_richiesta,
+                    ricompensa_free_valore=t.ricompensa_free_valore,
+                    ricompensa_premium_valore=t.ricompensa_premium_valore
+                )
+                session.add(new_tier)
         
         session.commit()
         
         # Announce New Season
         welcome_msg = f"🌟 **NUOVA STAGIONE INIZIATA!** 🌟\n\n"
-        welcome_msg += f"Benvenuti nella **{new_season.nome}**!\n"
-        welcome_msg += f"📅 Scadenza: {new_season.data_fine}\n\n"
+        welcome_msg += f"Benvenuti nella **{next_season.nome}**!\n"
+        welcome_msg += f"📅 Scadenza: {next_season.data_fine}\n\n"
         welcome_msg += "Tutti i Pass Saga sono stati resettati. Riuscirete a completare tutte le Saghe di nuovo?\n"
         welcome_msg += "Combattete, livellate e conquistate i premi!"
         
@@ -2215,6 +2770,310 @@ def handle_inline_buttons(call):
             bot.edit_message_caption(msg_l, call.message.chat.id, call.message.message_id)
         else:
             bot.edit_message_text(msg_l, call.message.chat.id, call.message.message_id)
+        return
+
+    elif action.startswith("dg_"):
+        parts = action.split("_")
+        dg_cmd = parts[1]
+        
+        # Early answer to prevent timeout
+        try:
+            bot.answer_callback_query(call.id)
+        except:
+            pass
+        
+        session = Database().Session()
+        try:
+            # BUG FIX: Re-fetch user in active session to ensure stats synchronization
+            utente = session.query(Utente).filter_by(id_telegram=user_id).first()
+            if not utente:
+                session.close()
+                try: bot.answer_callback_query(call.id, "Errore: utente non trovato.")
+                except: pass
+                return
+
+            if dg_cmd == "spawn":
+                # dg_spawn_id_{dungeon_id}
+                d_id = int(parts[3])
+                template = session.get(Dungeon, d_id)
+                # Logic to spawn initial enemy
+                hp = int(200 * template.difficolta) # Base 200 HP for groups
+                new_dg = ActiveDungeon(
+                    dungeon_id=d_id,
+                    stanza_attuale=1,
+                    enemy_name="Guardiano Iniziale",
+                    enemy_hp=hp,
+                    enemy_max_hp=hp
+                )
+                session.add(new_dg)
+                session.commit()
+                bot.answer_callback_query(call.id, f"🏰 Dungeon {template.nome} APERTO!")
+                
+                msg_open = f"🏰 **IL PORTALE SI È APERTO!** 🏰\n\nL'admin {call.from_user.first_name} ha attivato il Dungeon: **{template.nome}**.\n\n⚠️ Entrare costa 1 **Chiave del Dungeon**.\n\nPreparatevi alla sfida!"
+                markup_join = types.InlineKeyboardMarkup()
+                markup_join.add(types.InlineKeyboardButton("🎮 ENTRA NEL DUNGEON", callback_data=f"dg_join_{new_dg.id}"))
+                
+                if template.image_url:
+                    try: bot.send_photo(call.message.chat.id, template.image_url, caption=msg_open, reply_markup=markup_join, parse_mode='Markdown')
+                    except: bot.send_message(call.message.chat.id, msg_open, reply_markup=markup_join, parse_mode='Markdown')
+                else:
+                    bot.send_message(call.message.chat.id, msg_open, reply_markup=markup_join, parse_mode='Markdown')
+
+            elif dg_cmd == "join":
+                dg_id = int(parts[2])
+                active_dg = session.get(ActiveDungeon, dg_id)
+                if not active_dg or not active_dg.is_open:
+                    bot.answer_callback_query(call.id, "Iscrizioni chiuse.")
+                    return
+
+                # Check Key
+                key = Collezionabili().getItemByUser(user_id, "Chiave del Dungeon")
+                if not key or key.quantita <= 0:
+                    bot.answer_callback_query(call.id, "❌ Serve una Chiave del Dungeon!", show_alert=True)
+                    return
+
+                # Consume Key
+                Collezionabili().usaOggetto(user_id, "Chiave del Dungeon")
+                
+                # Participant setup
+                # BUG FIX: Use user's CURRENT HP/Aura instead of max
+                participant = DungeonParticipant(
+                    active_dungeon_id=active_dg.id,
+                    user_id=user_id,
+                    hp_attuale=utente.vita,
+                    aura_attuale=utente.aura
+                )
+                session.add(participant)
+                
+                # Update Action Log
+                active_dg.last_log = f"🚀 {utente.nome} è entrato nel Dungeon!"
+                session.commit()
+                
+                bot.answer_callback_query(call.id, "🚀 Sei entrato nel Dungeon!")
+                # Refresh Battle Message for everyone
+                BotCommands(call.message, bot, user_id=user_id)._show_group_dungeon_battle(active_dg, session, call, participant_viewing=participant)
+
+            elif dg_cmd in ["atk", "spc"]:
+                dg_id = int(parts[2])
+                active_dg = session.get(ActiveDungeon, dg_id)
+                participant = session.query(DungeonParticipant).filter_by(active_dungeon_id=dg_id, user_id=user_id).first()
+                dungeon = session.get(Dungeon, active_dg.dungeon_id) if active_dg else None
+                
+                if not active_dg or not participant or not active_dg.is_active or not participant.is_alive or not dungeon:
+                    bot.answer_callback_query(call.id, "Dungeon terminato o sei morto.")
+                    return
+
+                # Attack logic
+                dmg_base = 10 + (utente.stat_danno * 2)
+                
+                # Oozaru Multiplier
+                curr_lv = session.query(Livello).filter_by(id=utente.livello_selezionato).first()
+                if curr_lv and "Oozaru" in curr_lv.nome:
+                    dmg_base *= 10
+
+                if dg_cmd == "spc":
+                    costo_aura = 40
+                    if participant.aura_attuale < costo_aura:
+                        bot.answer_callback_query(call.id, "Aura insufficiente.")
+                        return
+                    participant.aura_attuale -= costo_aura
+                    
+                    # --- SYNC AURA ---
+                    utente.aura = participant.aura_attuale
+                    # -----------------
+                    
+                    dmg_base *= 2.5
+                
+                final_dmg = int(dmg_base * random.uniform(0.9, 1.1))
+                active_dg.enemy_hp = max(0, active_dg.enemy_hp - final_dmg)
+                participant.dmg_done += final_dmg
+                
+                log = f"⚔️ Hai inflitto {final_dmg} danni!"
+                
+                if active_dg.enemy_hp <= 0:
+                    # Stanza completata
+                    if active_dg.stanza_attuale >= dungeon.num_stanze:
+                        # Victory!
+                        active_dg.is_active = False
+                        bot.answer_callback_query(call.id, "🏆 VITTORIA!")
+                        # Rewards
+                        # Rewards
+                        all_pts = session.query(DungeonParticipant).filter_by(active_dungeon_id=active_dg.id).all()
+                        reward_list = ""
+                        for p in all_pts:
+                            u = session.query(Utente).filter_by(id_telegram=p.user_id).first()
+                            if u:
+                                contribution_bonus = int(p.dmg_done / 10)
+                                total_points = dungeon.ricompensa_wumpa + contribution_bonus
+                                total_exp = dungeon.ricompensa_exp
+                                
+                                u.points += total_points
+                                u.exp += total_exp
+                                
+                                reward_list += f"👤 {u.nome}: {p.dmg_done} dmg -> {total_exp} XP, {total_points} Fagioli Zen 🫘\n"
+
+                        session.commit()
+                        bot.send_message(call.message.chat.id, f"🏆 **DUNGEON COMPLETATO!** 🏆\n\nHai sbaragliato: {dungeon.nome}\n\n💰 **Ricompense**:\n{reward_list}")
+                        return
+                    else:
+                        # Next Room
+                        active_dg.stanza_attuale += 1
+                        active_dg.is_open = False # Close entry after room 1
+                        new_hp = int(200 * dungeon.difficolta * (1 + 0.5 * active_dg.stanza_attuale))
+                        active_dg.enemy_hp = new_hp
+                        active_dg.enemy_max_hp = new_hp
+                        active_dg.enemy_name = "Boss Finale" if active_dg.stanza_attuale == dungeon.num_stanze else "Guardiano d'élite"
+                        log += f"\n➡️ Stanza {active_dg.stanza_attuale}!"
+                # Counter attack
+                enemy_dmg = int(random.randint(5, 12) * dungeon.difficolta)
+                mitigation = (utente.stat_resistenza or 0) / 100.0
+                enemy_dmg = int(enemy_dmg * (1 - mitigation))
+                participant.hp_attuale = max(0, participant.hp_attuale - enemy_dmg)
+                
+                # --- SYNC WITH REAL HP ---
+                utente.vita = participant.hp_attuale
+                # -------------------------
+                
+                # Update Action Log
+                user_action = "Attacco" if dg_cmd == "atk" else "Speciale"
+                active_dg.last_log = f"⚔️ {utente.nome} usa {user_action} (-{final_dmg} HP)\n👾 Il Boss contrattacca {utente.nome} (-{enemy_dmg} HP)"
+                
+                if participant.hp_attuale <= 0:
+                    participant.is_alive = False
+                    active_dg.last_log += f"\n💀 {utente.nome} è svenuto!"
+                
+                # --- CHECK FOR GLOBAL FAILURE ---
+                alive_count = session.query(DungeonParticipant).filter_by(active_dungeon_id=active_dg.id, is_alive=True).count()
+                if alive_count == 0:
+                    active_dg.is_active = False
+                    active_dg.last_log += "\n\n❌ **FALLIMENTO!** Tutti gli eroi sono stati sconfitti."
+                    bot.send_message(call.message.chat.id, f"💀 **DUNGEON FALLITO!** 💀\n\nNon ci sono più eroi in grado di combattere contro {active_dg.enemy_name}.\nIl portale si è chiuso.")
+                # --------------------------------
+                
+                session.commit()
+                # bot.answer_callback_query(call.id, log) # Moved to start of dg_ block
+                BotCommands(call.message, bot, user_id=user_id)._show_group_dungeon_battle(active_dg, session, call, participant_viewing=participant)
+
+            elif dg_cmd == "refresh":
+                dg_id = int(parts[2])
+                active_dg = session.get(ActiveDungeon, dg_id)
+                participant = session.query(DungeonParticipant).filter_by(active_dungeon_id=dg_id, user_id=user_id).first()
+                
+                # --- SYNC LOGIC (MINIMUM VALUE) ---
+                if participant and utente:
+                    synced_hp = min(utente.vita if utente.vita is not None else 9999, participant.hp_attuale)
+                    synced_aura = min(utente.aura if utente.aura is not None else 9999, participant.aura_attuale)
+                    
+                    utente.vita = synced_hp
+                    participant.hp_attuale = synced_hp
+                    
+                    utente.aura = synced_aura
+                    participant.aura_attuale = synced_aura
+                    
+                    session.commit()
+                    try:
+                        bot.answer_callback_query(call.id, "🔄 Stats Sincronizzate!")
+                    except: pass
+                # ----------------------------------
+
+                BotCommands(call.message, bot, user_id=user_id)._show_group_dungeon_battle(active_dg, session, call, participant_viewing=participant)
+
+            elif dg_cmd == "items":
+                dg_id = int(parts[2])
+                # Show usable potions from inventory
+                items = session.query(Collezionabili).filter(
+                    Collezionabili.id_telegram == str(user_id),
+                    Collezionabili.data_utilizzo == None,
+                    Collezionabili.oggetto.like("Pozione%")
+                ).all()
+
+                if not items:
+                    bot.answer_callback_query(call.id, "Non hai pozioni nell'inventario!", show_alert=True)
+                    return
+
+                markup = types.InlineKeyboardMarkup()
+                for item in items:
+                    markup.add(types.InlineKeyboardButton(f"🧪 {item.oggetto}", callback_data=f"dg_use_id_{dg_id}_{item.id}"))
+                markup.add(types.InlineKeyboardButton("⬅️ Indietro", callback_data=f"dg_refresh_{dg_id}"))
+
+                try:
+                    bot.edit_message_text("🧪 **SELEZIONA UNA POZIONE**\nUsa un oggetto per recuperare HP o Aura:", 
+                                         call.message.chat.id, call.message.message_id, 
+                                         parse_mode='Markdown', reply_markup=markup)
+                except Exception as e:
+                    if "message is not modified" not in str(e):
+                        print(f"Error in dg_items edit: {e}")
+
+            elif dg_cmd == "use":
+                # dg_use_id_{dg_id}_{item_id}
+                dg_id = int(parts[3])
+                item_id = int(parts[4])
+                
+                item = session.get(Collezionabili, item_id)
+                participant = session.query(DungeonParticipant).filter_by(active_dungeon_id=dg_id, user_id=user_id).first()
+                active_dg = session.get(ActiveDungeon, dg_id)
+
+                if not item or item.id_telegram != str(user_id) or item.data_utilizzo:
+                    bot.answer_callback_query(call.id, "Oggetto non valido.")
+                    return
+                
+                if not participant or not participant.is_alive:
+                    bot.answer_callback_query(call.id, "Non puoi usare oggetti ora.")
+                    return
+
+                # Apply Effect
+                eff_msg = ""
+                if "Rigenerante" in item.oggetto:
+                    max_hp = 50 + utente.stat_vita * 10
+                    if "Piccola" in item.oggetto: heal = int(max_hp * 0.25)
+                    elif "Media" in item.oggetto: heal = int(max_hp * 0.50)
+                    elif "Grande" in item.oggetto: heal = int(max_hp * 0.75)
+                    else: heal = max_hp # Enorme
+                    participant.hp_attuale = min(max_hp, participant.hp_attuale + heal)
+                    utente.vita = participant.hp_attuale # Sync
+                    eff_msg = f"❤️ Hai recuperato {heal} HP!"
+                elif "Aura" in item.oggetto:
+                    max_aura = 60 + utente.stat_aura * 5
+                    if "Piccola" in item.oggetto: reg = int(max_aura * 0.25)
+                    elif "Grande" in item.oggetto: reg = int(max_aura * 0.75)
+                    else: reg = max_aura # Enorme
+                    participant.aura_attuale = min(max_aura, participant.aura_attuale + reg)
+                    utente.aura = participant.aura_attuale # Sync
+                    eff_msg = f"💙 Hai recuperato {reg} Aura!"
+
+                # Consume Item
+                item.data_utilizzo = datetime.datetime.now()
+                active_dg.last_log = f"🧪 {utente.nome} ha usato {item.oggetto}!"
+                session.commit()
+                
+                bot.answer_callback_query(call.id, f"✅ Usato {item.oggetto}!\n{eff_msg}")
+                BotCommands(call.message, bot, user_id=user_id)._show_group_dungeon_battle(active_dg, session, call, participant_viewing=participant)
+
+            elif dg_cmd == "surrender":
+                dg_id = int(parts[2])
+                active_dg = session.get(ActiveDungeon, dg_id)
+                participant = session.query(DungeonParticipant).filter_by(active_dungeon_id=dg_id, user_id=user_id).first()
+                
+                if not active_dg or not participant:
+                    return
+
+                participant.is_alive = False
+                active_dg.last_log = f"🏳️ {utente.nome} si è arreso ed è fuggito dal dungeon."
+                
+                # Check if anyone is left
+                alive_count = session.query(DungeonParticipant).filter_by(active_dungeon_id=active_dg.id, is_alive=True).count()
+                if alive_count == 0:
+                    active_dg.is_active = False
+                    bot.send_message(call.message.chat.id, "🔚 **DUNGEON TERMINATO**\nTutti i partecipanti si sono ritirati o sono svenuti.")
+                
+                session.commit()
+                bot.answer_callback_query(call.id, "🏳️ Ti sei arreso!")
+                BotCommands(call.message, bot, user_id=user_id)._show_group_dungeon_battle(active_dg, session, call, participant_viewing=participant)
+
+        except Exception as e:
+            print(f"Error in dungeon group callback: {e}")
+        finally:
+            session.close()
         return
 
     elif action == "market_menu":
@@ -2608,59 +3467,256 @@ def handle_inline_buttons(call):
         return
 
     if action == "stat_menu":
-        # Calculate Points
-        total_points = utente.livello * 2
-        used_points = (utente.stat_vita + utente.stat_aura + utente.stat_danno + 
-                       utente.stat_velocita + utente.stat_resistenza + utente.stat_crit_rate)
-        available_points = total_points - used_points
-
-        msg = "📊 ALLOCAZIONE STATISTICHE\n\n"
-        msg += f"🎯 Punti Totali: {total_points} (Livello {utente.livello})\n"
-        msg += f"✅ Punti Usati: {used_points}\n"
-        msg += f"🆓 Punti Disponibili: {available_points}\n\n"
-        msg += "Allocati:\n"
-        msg += f"❤️ Vita: {utente.stat_vita} (+{utente.stat_vita * 10} HP)\n"
-        msg += f"💙 Aura: {utente.stat_aura} (+{utente.stat_aura * 5} MP)\n"
-        msg += f"⚔️ Danno: {utente.stat_danno} (+{utente.stat_danno * 2} DMG)\n"
-        msg += f"⚡️ Velocità: {utente.stat_velocita} (+{utente.stat_velocita})\n"
-        msg += f"🛡️ Resistenza: {utente.stat_resistenza} (+{utente.stat_resistenza}%)\n"
-        msg += f"🎯 Crit Rate: {utente.stat_crit_rate} (+{utente.stat_crit_rate}% / Max 75%)\n\n"
-        
-        if available_points > 0:
-            msg += f"💡 Hai {available_points} punto/i da allocare"
-        else:
-            msg += "✨ Tutti i punti sono stati allocati!"
-
-        # Inline Keyboard
-        markup = types.InlineKeyboardMarkup()
-        if available_points > 0:
-            markup.row(
-                types.InlineKeyboardButton("❤️ +1", callback_data="stat_add_vita"),
-                types.InlineKeyboardButton("💙 +1", callback_data="stat_add_aura")
-            )
-            markup.row(
-                types.InlineKeyboardButton("⚔️ +1", callback_data="stat_add_danno"),
-                types.InlineKeyboardButton("⚡️ +1", callback_data="stat_add_velocita")
-            )
-            markup.row(
-                types.InlineKeyboardButton("🛡️ +1", callback_data="stat_add_resistenza"),
-                types.InlineKeyboardButton("🎯 +1", callback_data="stat_add_crit_rate")
-            )
-        
-        markup.add(types.InlineKeyboardButton("🔄 Reset Statistiche (500 Fagioli)", callback_data="stat_reset"))
-        
-        # Growth Button
-        can_grow, _ = utente.verifica_crescita()
-        if can_grow:
-            markup.add(types.InlineKeyboardButton("🌟 CRESCI (Disponibile!)", callback_data="trigger_growth"))
-
-        if call.message.content_type == 'photo':
-            bot.edit_message_caption(msg, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode='Markdown')
-        else:
-            bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode='Markdown')
+        bot.answer_callback_query(call.id)
+        BotCommands(call.message, bot, user_id=user_id).handle_stats_menu(call=call)
+        return
 
     elif action == "trigger_growth":
         BotCommands(call.message, bot, user_id=user_id).handle_cresci()
+
+    # --- TRANSFORMATION SYSTEM ---
+    elif action == "trans_menu":
+        session = Database().Session()
+        try:
+            # 1. Identify Character
+            # Current Level
+            curr_lv_obj = Livello().infoLivelloByID(utente.livello_selezionato)
+            
+            char_name_for_query = ""
+            if curr_lv_obj.is_transformation:
+                base_obj = Livello().infoLivelloByID(curr_lv_obj.base_form_id)
+                if base_obj:
+                    char_name_for_query = base_obj.nome
+            else:
+                char_name_for_query = curr_lv_obj.nome
+            
+            # Name Normalization: Clean up titles to find base character transformations
+            char_name_for_query = char_name_for_query.replace(" Bambino", "").replace(" Adulto", "").replace(" Ragazzo", "")
+            
+            # Determination of current Saga ID for filtering
+            saga_thresholds = {
+                "Saga di Pilaf": 1, "Saga del 21° Torneo Tenkaichi": 5, "Saga del Red Ribbon": 10,
+                "Saga di Karin": 15, "Saga del 22° Torneo Tenkaichi": 20, "Saga del Grande Mago Piccolo": 25,
+                "Saga del 23° Torneo Tenkaichi": 30, "Saga dei Saiyan": 35, "Saga di Freezer": 45,
+                "Saga di Garlic Jr.": 50, "Saga degli Androidi": 55, "Saga di Cell": 60,
+                "Saga del Torneo delle Quattro Galassie": 65, "Saga della High School": 70, "Saga di Majin Bu": 75,
+                "Saga delle Sfere Nere": 85, "Saga di Baby": 90, "Saga di Super 17": 95, "Saga dei Draghi Malvagi": 100,
+                "Saga della Battaglia degli Dei": 105, "Saga della Resurrezione di 'F'": 110, "Saga dell'Universo 6": 115,
+                "Saga di Trunks del Futuro": 120, "Saga della Sopravvivenza dell'Universo": 125, "Saga di Broly": 130,
+                "Saga dei Prigionieri della Pattuglia Galattica": 135, "Saga di Granolah, il sopravvissuto": 140, "Saga dei Supereroi": 145
+            }
+            
+            current_saga_id = 1
+            # Find the highest unlocked saga based on level
+            for s_name, threshold in saga_thresholds.items():
+                if utente.livello >= threshold:
+                    # Get ID from DB
+                    s_cat = session.query(AchievementCategory).filter_by(nome=s_name).first()
+                    if s_cat:
+                        current_saga_id = max(current_saga_id, s_cat.id)
+            
+            available_trans = session.query(Transformation).filter_by(character_name=char_name_for_query).all()
+            
+            msg = f"🔥 **MENU TRASFORMAZIONI** 🔥\n"
+            msg += f"Personaggio: {char_name_for_query}\n"
+            msg += f"Stadio: {utente.stadio_crescita.capitalize()}\n\n"
+            
+            if not available_trans:
+                msg += "_Nessuna trasformazione disponibile per questo personaggio._"
+            
+            markup = types.InlineKeyboardMarkup()
+            
+            for tr in available_trans:
+                if tr.min_stadio != 'any' and tr.min_stadio != utente.stadio_crescita:
+                    continue
+                
+                # Saga Requirment Check
+                if tr.min_saga_id and tr.min_saga_id > current_saga_id:
+                    continue
+                    
+                # Check User Status
+                user_trans = session.query(UserTransformation).filter_by(user_id=user_id, transformation_id=tr.id).first()
+                is_owned = False
+                is_active_rental = False
+                expiry_str = ""
+                
+                if user_trans and user_trans.end_time > datetime.datetime.now():
+                    is_owned = True
+                    is_active_rental = True
+                    remaining = user_trans.end_time - datetime.datetime.now()
+                    hours = int(remaining.total_seconds() / 3600)
+                    expiry_str = f"(Scade tra {hours}h)"
+                    
+                # Button Logic
+                btn_text = f"{tr.name} "
+                callback = "ignore"
+                
+                # Oozaru special handling
+                is_oozaru = tr.name == "Oozaru"
+                
+                if is_active_rental:
+                    if utente.livello_selezionato == tr.target_livello_id:
+                        btn_text += "✅ (Attivo)"
+                        callback = "trans_unequip"
+                    else:
+                        if is_oozaru:
+                            now_hour = datetime.datetime.now().hour
+                            is_night = (now_hour >= 18 or now_hour < 3)
+                            is_full_moon = (get_moon_phase_info() == "Full Moon")
+                            is_artificial = utente.artificial_moon_expiry and utente.artificial_moon_expiry > datetime.datetime.now()
+                            
+                            if (is_night and is_full_moon) or is_artificial:
+                                btn_text += "🔄 Equipaggia"
+                                callback = f"trans_equip_{tr.id}"
+                            else:
+                                reason = []
+                                if not is_night: reason.append("Giorno")
+                                if not is_full_moon: reason.append("No Luna")
+                                btn_text += f"🌑 Bloccato ({'/'.join(reason)})"
+                                callback = "ignore_oozaru_time"
+                        else:
+                            btn_text += f"🔄 Equipaggia {expiry_str}"
+                            callback = f"trans_equip_{tr.id}"
+                else:
+                    price = tr.price
+                    if is_oozaru and price == 0:
+                        btn_text += "🔓 Sblocca Gratis"
+                    else:
+                        btn_text += f"🔒 Compra ({price} Fagioli - {tr.duration_hours}h)"
+                    callback = f"trans_buy_{tr.id}"
+                    
+                markup.add(types.InlineKeyboardButton(btn_text, callback_data=callback))
+                
+            markup.add(types.InlineKeyboardButton("🔙 Torna al Profilo", callback_data="profilo_menu"))
+                
+            try:
+                if call.message.content_type == 'photo':
+                    bot.edit_message_caption(msg, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode='Markdown')
+                else:
+                    bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode='Markdown')
+            except Exception as e:
+                print(f"Error editing in trans_menu: {e}")
+                bot.send_message(call.message.chat.id, msg, reply_markup=markup, parse_mode='Markdown')
+        finally:
+            session.close()
+
+    elif action.startswith("trans_buy_"):
+        session = Database().Session()
+        try:
+            tr_id = int(action.replace("trans_buy_", ""))
+            trans = session.get(Transformation, tr_id)
+            
+            if not trans:
+                bot.answer_callback_query(call.id, "Trasformazione non trovata.")
+                return
+
+            if utente.points < trans.price:
+                bot.answer_callback_query(call.id, f"Non hai abbastanza Fagioli! Te ne servono {trans.price}.", show_alert=True)
+                return
+                
+            # Buy!
+            # Re-fetch user attached to session to update points
+            u_sess = session.query(Utente).filter_by(id_telegram=user_id).first()
+            if u_sess:
+                u_sess.points -= trans.price
+            
+            # Add/Update UserTransformation
+            user_trans = session.query(UserTransformation).filter_by(user_id=user_id, transformation_id=tr_id).first()
+            duration = datetime.timedelta(hours=trans.duration_hours)
+            
+            if not user_trans:
+                user_trans = UserTransformation(
+                    user_id=user_id,
+                    transformation_id=tr_id,
+                    end_time=datetime.datetime.now() + duration,
+                    is_active=False
+                )
+                session.add(user_trans)
+            else:
+                if user_trans.end_time > datetime.datetime.now():
+                    user_trans.end_time += duration
+                else:
+                    user_trans.end_time = datetime.datetime.now() + duration
+            
+            session.commit()
+            bot.answer_callback_query(call.id, f"✅ Acquistato! Durata: {trans.duration_hours} ore.")
+            
+            # Refresh
+            call.data = "trans_menu"
+            handle_inline_buttons(call)
+        finally:
+            session.close()
+
+    elif action.startswith("trans_equip_"):
+        session = Database().Session()
+        try:
+            tr_id = int(action.replace("trans_equip_", ""))
+            trans = session.get(Transformation, tr_id)
+            user_trans = session.query(UserTransformation).filter_by(user_id=user_id, transformation_id=tr_id).first()
+            
+            if not user_trans or user_trans.end_time < datetime.datetime.now():
+                bot.answer_callback_query(call.id, "Scaduto o non posseduto!", show_alert=True)
+                call.data = "trans_menu"
+                handle_inline_buttons(call)
+                return
+
+            # Aura Check
+            cost = trans.aura_cost
+            if utente.aura < cost: 
+                bot.answer_callback_query(call.id, f"Non hai abbastanza Aura! ({cost} richiesti)", show_alert=True)
+                return
+                
+            # Deduct Aura and Equip
+            u_sess = session.query(Utente).filter_by(id_telegram=user_id).first()
+            if u_sess:
+                # Oozaru specific check for equip
+                if trans.name == "Oozaru":
+                    now_hour = datetime.datetime.now().hour
+                    is_night = (now_hour >= 18 or now_hour < 3)
+                    is_full_moon = (get_moon_phase_info() == "Full Moon")
+                    is_artificial = u_sess.artificial_moon_expiry and u_sess.artificial_moon_expiry > datetime.datetime.now()
+
+                    if not ((is_night and is_full_moon) or is_artificial):
+                        bot.answer_callback_query(call.id, "🌕 Puoi trasformarti solo di notte con la Luna Piena o usando una Luna Artificiale!", show_alert=True)
+                        session.close()
+                        return
+                    
+                    costo_extra = 100 # Deduct 100 aura on equip
+                    if u_sess.aura < costo_extra:
+                        bot.answer_callback_query(call.id, f"⚡ Aura insufficiente! Richiesti {costo_extra}.", show_alert=True)
+                        session.close()
+                        return
+                    u_sess.aura -= costo_extra
+
+                u_sess.livello_selezionato = trans.target_livello_id
+                session.commit()
+            
+            bot.answer_callback_query(call.id, f"🔥 TRASFORMAZIONE: {trans.name}!")
+            
+            # Refresh
+            call.data = "trans_menu"
+            handle_inline_buttons(call)
+        finally:
+            session.close()
+
+    elif action == "trans_unequip":
+        session = Database().Session()
+        try:
+            # Revert to base form
+            curr_lv = Livello().infoLivelloByID(utente.livello_selezionato)
+            if curr_lv and curr_lv.is_transformation and curr_lv.base_form_id:
+                u_sess = session.query(Utente).filter_by(id_telegram=user_id).first()
+                if u_sess:
+                    u_sess.livello_selezionato = curr_lv.base_form_id
+                    session.commit()
+                bot.answer_callback_query(call.id, "Trasformazione annullata.")
+            else:
+                bot.answer_callback_query(call.id, "Non sei trasformato o base form non trovata.")
+                
+            call.data = "trans_menu"
+            handle_inline_buttons(call)
+        finally:
+            session.close()
         
     elif action.startswith("stat_add_"):
         stat_name = action.replace("stat_add_", "")
@@ -2688,50 +3744,9 @@ def handle_inline_buttons(call):
             used_points += 1
             available_points -= 1
             
-            # Reconstruct Message
-            msg = "📊 ALLOCAZIONE STATISTICHE\n\n"
-            msg += f"🎯 Punti Totali: {total_points} (Livello {utente.livello})\n"
-            msg += f"✅ Punti Usati: {used_points}\n"
-            msg += f"🆓 Punti Disponibili: {available_points}\n\n"
-            msg += "Allocati:\n"
-            msg += f"❤️ Vita: {utente.stat_vita} (+{utente.stat_vita * 10} HP)\n"
-            msg += f"💙 Aura: {utente.stat_aura} (+{utente.stat_aura * 5} MP)\n"
-            msg += f"⚔️ Danno: {utente.stat_danno} (+{utente.stat_danno * 2} DMG)\n"
-            msg += f"⚡️ Velocità: {utente.stat_velocita} (+{utente.stat_velocita})\n"
-            msg += f"🛡️ Resistenza: {utente.stat_resistenza} (+{utente.stat_resistenza}%)\n"
-            msg += f"🎯 Crit Rate: {utente.stat_crit_rate} (+{utente.stat_crit_rate}% / Max 75%)\n\n"
-            
-            if available_points > 0:
-                msg += f"💡 Hai {available_points} punto/i da allocare"
-            else:
-                msg += "✨ Tutti i punti sono stati allocati!"
-
-            # Inline Keyboard
-            markup = types.InlineKeyboardMarkup()
-            if available_points > 0:
-                markup.row(
-                    types.InlineKeyboardButton("❤️ +1", callback_data="stat_add_vita"),
-                    types.InlineKeyboardButton("💙 +1", callback_data="stat_add_aura")
-                )
-                markup.row(
-                    types.InlineKeyboardButton("⚔️ +1", callback_data="stat_add_danno"),
-                    types.InlineKeyboardButton("⚡️ +1", callback_data="stat_add_velocita")
-                )
-                markup.row(
-                    types.InlineKeyboardButton("🛡️ +1", callback_data="stat_add_resistenza"),
-                    types.InlineKeyboardButton("🎯 +1", callback_data="stat_add_crit_rate")
-                )
-            markup.add(types.InlineKeyboardButton("🔄 Reset Statistiche (500 Fagioli)", callback_data="stat_reset"))
-            
-            # Growth Button
-            can_grow, _ = utente.verifica_crescita()
-            if can_grow:
-                markup.add(types.InlineKeyboardButton("🌟 CRESCI (Disponibile!)", callback_data="trigger_growth"))
-
-            if call.message.content_type == 'photo':
-                bot.edit_message_caption(msg, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode='Markdown')
-            else:
-                bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode='Markdown')
+            # Refresh UI
+            bot.answer_callback_query(call.id, "Punto allocato!")
+            BotCommands(call.message, bot, user_id=user_id).handle_stats_menu(call=call)
         else:
             bot.answer_callback_query(call.id, "Non hai punti disponibili!")
 
@@ -2754,45 +3769,11 @@ def handle_inline_buttons(call):
             used_points = 0
             available_points = total_points
 
-            msg = "📊 ALLOCAZIONE STATISTICHE\n\n"
-            msg += f"🎯 Punti Totali: {total_points} (Livello {utente.livello})\n"
-            msg += f"✅ Punti Usati: {used_points}\n"
-            msg += f"🆓 Punti Disponibili: {available_points}\n\n"
-            msg += "Allocati:\n"
-            msg += f"❤️ Vita: {utente.stat_vita} (+0 HP)\n"
-            msg += f"💙 Aura: {utente.stat_aura} (+0 MP)\n"
-            msg += f"⚔️ Danno: {utente.stat_danno} (+0 DMG)\n"
-            msg += f"⚡️ Velocità: {utente.stat_velocita} (+0)\n"
-            msg += f"🛡️ Resistenza: {utente.stat_resistenza} (+0%)\n"
-            msg += f"🎯 Crit Rate: {utente.stat_crit_rate} (+0%)\n\n"
-            msg += f"💡 Hai {available_points} punto/i da allocare"
-
-            markup = types.InlineKeyboardMarkup()
-            markup.row(
-                types.InlineKeyboardButton("❤️ +1", callback_data="stat_add_vita"),
-                types.InlineKeyboardButton("💙 +1", callback_data="stat_add_aura")
-            )
-            markup.row(
-                types.InlineKeyboardButton("⚔️ +1", callback_data="stat_add_danno"),
-                types.InlineKeyboardButton("⚡️ +1", callback_data="stat_add_velocita")
-            )
-            markup.row(
-                types.InlineKeyboardButton("🛡️ +1", callback_data="stat_add_resistenza"),
-                types.InlineKeyboardButton("🎯 +1", callback_data="stat_add_crit_rate")
-            )
-            markup.add(types.InlineKeyboardButton("🔄 Reset Statistiche (500 Fagioli)", callback_data="stat_reset"))
-            
-            # Growth Button
-            can_grow, _ = utente.verifica_crescita()
-            if can_grow:
-                markup.add(types.InlineKeyboardButton("🌟 CRESCI (Disponibile!)", callback_data="trigger_growth"))
-
-            if call.message.content_type == 'photo':
-                bot.edit_message_caption(msg, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode='Markdown')
-            else:
-                bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode='Markdown')
+            # Refresh UI
+            bot.answer_callback_query(call.id, "Statistiche resettate!")
+            BotCommands(call.message, bot, user_id=user_id).handle_stats_menu(call=call)
         else:
-             bot.answer_callback_query(call.id, f"Non hai abbastanza Fagioli! Te ne servono {costo_reset}.")
+            bot.answer_callback_query(call.id, f"Non hai abbastanza Fagioli! Te ne servono {costo_reset}.")
 
     elif action == "evoca_shenron":
         markup = types.InlineKeyboardMarkup()
@@ -3204,6 +4185,10 @@ def handle_inline_buttons(call):
             costo_aura = selected_lv.skill_aura_cost if selected_lv else 60
             
             dmg_base = 10 + (stat_danno * 2) # Base dmg calc (10 + stat*2)
+            
+            # Oozaru Multiplier
+            if selected_lv and "Oozaru" in selected_lv.nome:
+                dmg_base *= 10
             attack_name = "Attacco"
             crit = False
             
@@ -3292,6 +4277,18 @@ def handle_inline_buttons(call):
                                 session.add(prog)
                                 session.flush()
                             prog.season_exp += xp_gain
+
+                        # --- NEW: Dungeon Key Drop (50% chance for seasonal bosses) ---
+                        if active_season and boss.season_id == active_season.id:
+                            if random.randint(1, 100) <= 50:
+                                new_key = Collezionabili(
+                                    id_telegram=str(p.user_id),
+                                    oggetto="Chiave del Dungeon",
+                                    data_acquisizione=datetime.datetime.now(),
+                                    quantita=1
+                                )
+                                session.add(new_key)
+                                loot_msg += f"🗝 **{p_user.nome}** ha trovato una **Chiave del Dungeon** rara!\n"
                 
                 # --- NEW: Achievement Boss Kill Check (Solo Fight Requirement) ---
                 # Find achievements related to this boss
@@ -3406,11 +4403,18 @@ def handle_inline_buttons(call):
             session.close()
         return
 
-    elif action == "main_menu":
-        BotCommands(call.message, bot, user_id=user_id).handle_info()
-        # Note: handle_info currently sends a NEW message. 
-        # If we want to edit, we'd need to refactor it. 
-        # But for now, let's at least make it work.
+    elif action in ["main_menu", "profilo_menu"]:
+        try:
+            bot.answer_callback_query(call.id)
+            BotCommands(call.message, bot, user_id=user_id).handle_info(call=call)
+        except Exception as e:
+            print(f"Error in profile_menu callback: {e}")
+            try: bot.answer_callback_query(call.id, "Errore nel caricamento del profilo.")
+            except: pass
+        return
+
+    elif action == "ignore_oozaru_time":
+        bot.answer_callback_query(call.id, "🌕 L'Oozaru appare solo di notte (18-03) con la Luna Piena!", show_alert=True)
         return
 
     elif action.startswith("set_char_"):
@@ -3418,13 +4422,46 @@ def handle_inline_buttons(call):
         session = Database().Session()
         try:
             char = session.get(Livello, char_id)
-            if char:
-                Database().update_user(user_id, {'livello_selezionato': char_id})
-                bot.answer_callback_query(call.id, f"Hai selezionato: {char.nome}!")
-                # Refresh Menu
-                BotCommands(call.message, bot, user_id=user_id).handle_choose_character_v2(call=call)
+            utente = session.query(Utente).filter_by(id_telegram=user_id).first()
+            
+            if char and utente:
+                if utente.livello_selezionato == char_id:
+                    # User re-selected the SAME character: Redirect to profile
+                    bot.answer_callback_query(call.id, "Personaggio già attivo! Torno al profilo...")
+                    BotCommands(call.message, bot, user_id=user_id).handle_info(call=call)
+                else:
+                    # New character selection
+                    # Oozaru Transformation Logic
+                    if char.nome == "Goku (Oozaru)":
+                        now_hour = datetime.datetime.now().hour
+                        # Allowed: 18:00 to 03:00
+                        if not (now_hour >= 18 or now_hour < 3):
+                            bot.answer_callback_query(call.id, "🌕 L'Oozaru può apparire solo di notte (18:00 - 03:00)!", show_alert=True)
+                            session.close()
+                            return
+                        
+                        if get_moon_phase_info() != "Full Moon":
+                            bot.answer_callback_query(call.id, "🌑 Serve la Luna Piena per trasformarsi in Oozaru!", show_alert=True)
+                            session.close()
+                            return
+                        
+                        costo_aura = 100
+                        if (utente.aura or 0) < costo_aura:
+                            bot.answer_callback_query(call.id, f"⚡ Aura insufficiente! Ti servono {costo_aura} punti aura.", show_alert=True)
+                            session.close()
+                            return
+                        
+                        # Apply cost
+                        utente.aura -= costo_aura
+                        bot.answer_callback_query(call.id, "🌕 RRRRAAAAAARRRRGHHHHH!!! Ti sei trasformato!")
+                    else:
+                        bot.answer_callback_query(call.id, f"Hai selezionato: {char.nome}!")
+
+                    Database().update_user(user_id, {'livello_selezionato': char_id, 'aura': utente.aura})
+                    # Refresh Menu
+                    BotCommands(call.message, bot, user_id=user_id).handle_choose_character_v2(call=call)
             else:
-                bot.answer_callback_query(call.id, "Personaggio non trovato.")
+                bot.answer_callback_query(call.id, "Personaggio o utente non trovato.")
         except Exception as e:
             print(f"Error setting character: {e}")
             bot.answer_callback_query(call.id, "Errore nella selezione.")
@@ -3432,7 +4469,28 @@ def handle_inline_buttons(call):
             session.close()
         return
 
+def get_moon_phase_info():
+    """
+    Calculates lunar phase based on a 29.53 day cycle.
+    Returns: 'Full Moon', 'Other'
+    """
+    # Known full moon: 2024-02-24 (approx)
+    ref_date = datetime.datetime(2024, 2, 24, 18, 0)
+    now = datetime.datetime.now()
+    diff = now - ref_date
+    cycle_days = 29.53059
+    
+    # Days since reference full moon
+    days_passed = diff.total_seconds() / (24 * 3600)
+    position = days_passed % cycle_days
+    
+    # Full moon window (+/- 1.5 days from peak for a 3-day window)
+    if position < 1.5 or position > (cycle_days - 1.5):
+        return "Full Moon"
+    return "Other"
+
 def aura_drain_job():
+
     """Background job to drain aura from transformed players."""
     session = Database().Session()
     try:
@@ -3450,6 +4508,18 @@ def aura_drain_job():
             
             u.aura = max(0, curr_aura - drain)
             
+            # Specific Oozaru Time Reversion (03:00 - 18:00)
+            if char.nome == "Goku (Oozaru)":
+                now_hour = datetime.datetime.now().hour
+                is_artificial = u.artificial_moon_expiry and u.artificial_moon_expiry > datetime.datetime.now()
+                
+                if (now_hour >= 3 and now_hour < 18) and not is_artificial:
+                    u.livello_selezionato = char.base_form_id or 11
+                    try:
+                        bot.send_message(u.id_telegram, "☀️ **IL SOLE SORGE!**\nLa luna è sparita e sei tornato normale.")
+                    except: pass
+                    continue # Skip aura check as we already reverted
+
             # Check for reversion
             if u.aura == 0:
                 base_char_id = char.base_form_id or 11 # Revert to Goku Bambino as safe fallback

@@ -82,6 +82,27 @@ class MarketListing(Base):
     timestamp = Column(DateTime, default=datetime.now)
     is_active = Column(Boolean, default=True)
 
+class Transformation(Base):
+    __tablename__ = "transformation"
+    id = Column(Integer, primary_key=True)
+    name = Column(String(64))
+    character_name = Column(String(64)) # e.g. "Goku"
+    target_livello_id = Column(Integer, ForeignKey('livello.id'))
+    min_stadio = Column(String(32)) # "bambino", "adulto", "any"
+    aura_cost = Column(Integer)
+    duration_hours = Column(Integer) # Rental duration
+    price = Column(Integer)
+    min_saga_id = Column(Integer, default=1) # Requirement: current saga ID >= this
+    # saga_required? For now rely on manual seeding order or level
+
+class UserTransformation(Base):
+    __tablename__ = "user_transformation"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('utente.id_Telegram'))
+    transformation_id = Column(Integer, ForeignKey('transformation.id'))
+    end_time = Column(DateTime)
+    is_active = Column(Boolean, default=False)
+
 class Database:
     def __init__(self):
         engine = create_engine('sqlite:///dbz.db', connect_args={'timeout': 30})
@@ -91,11 +112,31 @@ class Database:
     def startMarkup(self,utente=None):
         markup = types.ReplyKeyboardMarkup()
 
-        markup.add('ℹ️ info','🎒 Inventario','🛒 Negozio')
+        markup.add('👤 Profilo PG','🎒 Inventario','🛒 Negozio')
         if utente is not None:
-            markup.add('👤 Scegli il personaggio', '🐢 Kame House')
+            markup.add('👾 Scegli il personaggio', '🐢 Kame House')
             markup.add('🏆 Obiettivi Saga', '📖 Saga Pass')
-            markup.add('🏪 Mercato') # New Button
+        markup.add('🏪 Mercato')
+        
+        # Controlled Dungeon Visibility
+        show_dungeon = False
+        is_admin = Utente().isAdmin(utente)
+        
+        if is_admin:
+            show_dungeon = True
+        else:
+            # Check for active dungeon
+            session = self.Session()
+            try:
+                active = session.query(ActiveDungeon).filter_by(is_active=True).first()
+                if active:
+                    show_dungeon = True
+            except: pass
+            finally: session.close()
+
+        if show_dungeon:
+            markup.add('🏰 Dungeon')
+
         return markup
 
     def negozioPozioniMarkup(self, user_id=None):
@@ -106,6 +147,7 @@ class Database:
             '🧪 Pozione Rigenerante Grande', '🧪 Pozione Rigenerante Enorme',
             '🧪 Pozione Aura Piccola', '🧪 Pozione Aura Media',
             '🧪 Pozione Aura Grande', '🧪 Pozione Aura Enorme',
+            '🧪 Generatore di Onde Blutz',
         ]
 
         if user_id: 
@@ -331,6 +373,9 @@ class Utente(Base):
     
     # Generic JSON storage for extra data (e.g. active saga override)
     misc_data = Column('misc_data', String, default="{}")
+    
+    # Artificial Moon Expiry
+    artificial_moon_expiry = Column('artificial_moon_expiry', DateTime)
 
     def CreateUser(self,id_telegram,username,name,last_name):
 
@@ -519,12 +564,19 @@ class Utente(Base):
             
             # Formatta la visualizzazione Vita (es. 50/50)
             current_vita = utente.vita if utente.vita is not None else 50
-            answer += f"❤️ *Vita*: {current_vita}/{max_vita}\n"
+            answer += f"❤️ {draw_bar(current_vita, max_vita)} {current_vita}/{max_vita}\n"
             
             # Aura attualmente è sempre al massimo (non c'è consumo)
             current_aura = utente.aura if utente.aura is not None else 60
-            answer += f"💙 *Aura*: {current_aura}/{max_aura}\n"
-            answer += f"⚔️ *Danno*: {10 + (utente.stat_danno or 0) * 2}\n"
+            answer += f"💙 {draw_bar(current_aura, max_aura)} {current_aura}/{max_aura}\n"
+            
+            # DAMAGE CALC
+            base_dmg = 10 + (utente.stat_danno or 0) * 2
+            is_oozaru = selectedLevel and "Oozaru" in selectedLevel.nome
+            if is_oozaru:
+                base_dmg *= 10
+                
+            answer += f"⚔️ *Danno*: {base_dmg}\n"
             answer += f"⚡️ *Velocità*: {(utente.stat_velocita or 0)}\n"
             answer += f"🛡️ *Resistenza*: {(utente.stat_resistenza or 0)}% (MAX 75%)\n"
             
@@ -541,10 +593,7 @@ class Utente(Base):
         
         # Exp display
         next_exp = 0
-        infoNextLv = Livello().infoLivello(utente.livello + 1)
-        if infoNextLv:
-            next_exp = infoNextLv.exp_to_lv
-        elif utente.livello < len(livelli):
+        if utente.livello < len(livelli):
             next_exp = livelli[utente.livello]
             
         if next_exp > 0:
@@ -566,7 +615,9 @@ class Utente(Base):
                 multiplier *= 1.5
                 
             cost = selectedLevel.skill_aura_cost or 60
-            skill_dmg = int((10 + (utente.stat_danno or 0) * 2) * multiplier) # Base (10 + stat*2) * Multiplier
+            
+            # Re-calc base dmg for skill (using the already multiplied base_dmg)
+            skill_dmg = int(base_dmg * multiplier)
             
             answer += f"\n✨ **Abilità**:\n"
             answer += f"🟣 {skill_name}: {skill_dmg} DMG, {cost} Aura\n"
@@ -577,7 +628,7 @@ class Utente(Base):
                 s2_mult = selectedLevel.skill2_multiplier or 4.5
                 if utente.stadio_crescita == 'adulto':
                     s2_mult *= 1.5
-                s2_dmg = int((10 + (utente.stat_danno or 0) * 2) * s2_mult)
+                s2_dmg = int(base_dmg * s2_mult)
                 s2_cost = selectedLevel.skill2_aura_cost or 100
                 answer += f"🔥 {s2_name}: {s2_dmg} DMG, {s2_cost} Aura\n"
         else:
@@ -641,8 +692,7 @@ class Utente(Base):
         msg += f"🛡️ Res: {res}% | 💥 Crit: {crit}% | ⚡️ Vel: {vel}\n\n"
         
         # Exp Bar
-        info_next_lv = Livello().infoLivello(utente.livello + 1)
-        next_exp = info_next_lv.exp_to_lv if info_next_lv else (livelli[utente.livello] if utente.livello < len(livelli) else 0)
+        next_exp = livelli[utente.livello] if utente.livello < len(livelli) else 0
         
         msg += f"📈 Exp: {utente.exp}/{next_exp}\n"
         msg += f"[{draw_bar(utente.exp, next_exp)}]\n"
@@ -672,6 +722,9 @@ class Utente(Base):
         rest_mp = "+2 MP" if utente.is_resting else "+0 MP"
         msg += f"🛌 Riposo: {rest_hp}/{rest_mp}\n"
         
+        if not selected_level:
+            return msg, None
+
         # Image URL
         img_url = selected_level.link_img if not (utente.stadio_crescita == 'adulto' and selected_level.link_img_adult) else selected_level.link_img_adult
         
@@ -918,8 +971,11 @@ class Livello(Base):
 
     def infoLivelloByID(self, livelloid):
         session = Database().Session()
-        livello = session.query(Livello).filter_by(id=livelloid).first()
-        return livello
+        try:
+            livello = session.query(Livello).filter_by(id=livelloid).first()
+            return livello
+        finally:
+            session.close()
 
     def getLevels(self):
         session = Database().Session()
@@ -1308,6 +1364,7 @@ class Collezionabili(Base):
                     bot.send_sticker(message.chat.id, sti)
                     sti.close() 
                     self.triggerDrop(message, tento_oggetto, quantita, cariche=ch)
+                    
                     return True
                 except FileNotFoundError:
                     print(f"Sticker not found: Stickers/{tento_oggetto['sticker']}")
@@ -1514,6 +1571,41 @@ class RaidParticipant(Base):
     user_id = Column(Integer, ForeignKey('utente.id_Telegram'))
     dmg_total = Column(Integer, default=0)
     last_attack_time = Column(DateTime)
+
+class Dungeon(Base):
+    __tablename__ = 'dungeon'
+    id = Column(Integer, primary_key=True)
+    nome = Column(String)
+    descrizione = Column(String)
+    livello_richiesto = Column(Integer, default=1)
+    num_stanze = Column(Integer, default=3)
+    ricompensa_wumpa = Column(Integer, default=100)
+    ricompensa_exp = Column(Integer, default=50)
+    difficolta = Column(Float, default=1.0)
+    image_url = Column(String) # For Boss Photo
+
+class ActiveDungeon(Base):
+    __tablename__ = 'active_dungeon'
+    id = Column(Integer, primary_key=True)
+    dungeon_id = Column(Integer, ForeignKey('dungeon.id'))
+    stanza_attuale = Column(Integer, default=1)
+    enemy_name = Column(String)
+    enemy_hp = Column(Integer)
+    enemy_max_hp = Column(Integer)
+    is_open = Column(Boolean, default=True) # Open for joining
+    is_active = Column(Boolean, default=True) # Still running
+    last_log = Column(Text, default="🏰 Il Dungeon è iniziato!")
+    start_time = Column(DateTime, default=datetime.datetime.now)
+
+class DungeonParticipant(Base):
+    __tablename__ = 'dungeon_participant'
+    id = Column(Integer, primary_key=True)
+    active_dungeon_id = Column(Integer, ForeignKey('active_dungeon.id'))
+    user_id = Column(Integer, ForeignKey('utente.id_Telegram'))
+    hp_attuale = Column(Integer)
+    aura_attuale = Column(Integer)
+    dmg_done = Column(Integer, default=0)
+    is_alive = Column(Boolean, default=True)
 
 
 def spawn_random_seasonal_boss(only_boss=False):
@@ -1775,61 +1867,9 @@ def boss_auto_attack_job():
     except Exception as e:
         print(f"Error in boss auto-attack: {e}")
     finally:
-        session.close()
-
-def process_season_end(season):
-    """Calculates top players and announces end of season."""
-    session = Database().Session()
-    try:
-        # 1. Fetch Top 3
-        top_players = session.query(UserSeasonProgress).filter_by(season_id=season.id).order_by(UserSeasonProgress.season_exp.desc()).limit(3).all()
-        
-        msg = f"🏆 **FINE STAGIONE: {season.nome}** 🏆\n\n"
-        msg += "Il tempo è scaduto! Ecco i guerrieri più valorosi di questa stagione che ricevono i premi automatici:\n\n"
-        
-        medals = ["🥇", "🥈", "🥉"]
-        rewards = [5000, 2500, 1000] # Standard rewards
-        
-        for i, prog in enumerate(top_players):
-            user = session.query(Utente).filter_by(id_telegram=prog.user_id).first()
-            if user:
-                premio = rewards[i] if i < len(rewards) else 0
-                user.points += premio
-                msg += f"{medals[i]} **{user.nome}** - {prog.season_exp} XP (+{premio} {PointsName})\n"
-            else:
-                msg += f"{medals[i]} **Guerriero {prog.user_id}** - {prog.season_exp} XP\n"
-        
-        if not top_players:
-            msg += "Nessun gurreiro ha partecipato a questa stagione... che peccato!\n"
-            
-        msg += "\n🎉 Complimenti ai vincitori! I premi sono stati accreditati automaticamente sui vostri account."
-        msg += "\n\nLa stagione è ora **CHIUSA**. Restate sintonizzati per la prossima!"
-        
-        bot.send_message(Tecnologia_GRUPPO, msg, parse_mode='Markdown')
-        
-        # 2. Deactivate
-        season.active = False
-        session.add(season)
-        session.commit()
-    except Exception as e:
-        print(f"Error processing season end: {e}")
-    finally:
-        session.close()
-
-def check_season_expiry():
-    """Checks if the active season has reached its end date."""
-    session = Database().Session()
-    try:
-        active_season = session.query(Season).filter_by(active=True).first()
-        if active_season and active_season.data_fine:
-            if datetime.date.today() >= active_season.data_fine:
-                print(f"Season {active_season.id} expired. Ending it...")
-                process_season_end(active_season)
-    except Exception as e:
-        print(f"Error checking season expiry: {e}")
-    finally:
-        session.close()
-
+        session.close()# NOTE: Season management functions (check_season_expiry, process_season_end) 
+# have been moved to main.py to allow for better integration with bot handlers 
+# and to avoid circular dependency issues.
 def calculate_and_sync_saga_progress(user_id):
     import datetime
     session = Database().Session()

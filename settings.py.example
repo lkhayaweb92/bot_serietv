@@ -37,14 +37,14 @@ PROMOZIONI = {
     },
 }
 
-CANALE_LOG          =    '-1001804087701'
+CANALE_LOG          =    '-100xxxxxxxxx'
 TEST                =    1
 
-TEST_TOKEN      = 'INSERISCI_TOKEN_QUI'
-SerieTv_TOKEN     = 'INSERISCI_TOKEN_QUI'
+TEST_TOKEN      = 'YOUR_TEST_TOKEN'
+SerieTv_TOKEN     = 'YOUR_REAL_TOKEN'
 
-TEST_GRUPPO     = -1002054513012
-Tecnologia_GRUPPO    = -1001685235351
+TEST_GRUPPO     = -100xxxxxxxxx
+Tecnologia_GRUPPO    = -100xxxxxxxxx
 
 if TEST:
     BOT_TOKEN       = TEST_TOKEN
@@ -56,26 +56,25 @@ else:
 PointsName = 'Fagioli Zen 🫘'
 
 PREMIUM_CHANNELS = {
-    'CatalogoPremium'            :    '-1001908210673',
-    'SerieUniverse'              :    '-1001369506956',
+    'Channel1'            :    '-100xxxxxxxxx',
+    'Channel2'            :    '-100xxxxxxxxx',
 }
 
-REQUIRED_CHANNEL_ID = '-1002054513012' # SerieUniverse
-REQUIRED_CHANNEL_LINK = 'https://t.me/+DdCPXCBMvSIwNTg8' # Esempio di link
+REQUIRED_CHANNEL_ID = '-100xxxxxxxxx'
+REQUIRED_CHANNEL_LINK = 'https://t.me/your_channel'
 
 ALBUM = {
-    'Catalogo SerieCartoonUniverse'    :    '-1001884425320',
-    'Serie'                            :    '-1001884425320',
-    'SerieCartoonUniverse'             :    '-1001607428774',
+    'Album1'    :    '-100xxxxxxxxx',
+    'Album2'    :    '-100xxxxxxxxx',
 }
 
 MISCELLANIA = {
-    'Movie'     :    '-1001483847400',
-    'Libri'     :    '-1001395413398'
+    'Misc1'     :    '-100xxxxxxxxx',
+    'Misc2'     :    '-100xxxxxxxxx'
 }
 
 
 from telebot import TeleBot
 from telebot import types
 bot = TeleBot(BOT_TOKEN, threaded=False)
-hideBoard = types.ReplyKeyboardRemove()  
+hideBoard = types.ReplyKeyboardRemove()
