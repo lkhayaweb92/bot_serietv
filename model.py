@@ -341,12 +341,42 @@ class Database:
 
 def create_table(engine):
     Base.metadata.create_all(engine)
+    
+    # Init default factions if empty
+    from sqlalchemy.orm import sessionmaker
+    Session = sessionmaker(bind=engine)
+    session = Session()
+    try:
+        from sqlalchemy import inspect
+        if inspect(engine).has_table("fazione"):
+            if session.query(Fazione).count() == 0:
+                fazioni = [
+                    Fazione(nome="Squadra Z", descrizione="Protettori della Terra, combattono per la pace nell'universo.", link_immagine="https://static.wikia.nocookie.net/dragonball/images/e/ef/Z_Fighters_BoG_01.png"),
+                    Fazione(nome="Esercito del Fiocco Rosso", descrizione="Organizzazione paramilitare decisa a conquistare il mondo.", link_immagine="https://static.wikia.nocookie.net/dragonball/images/8/87/Red_Ribbon_Army_Logo.png"),
+                    Fazione(nome="Pattuglia Galattica", descrizione="Polizia interstellare che mantiene l'ordine nella Via Lattea.", link_immagine="https://static.wikia.nocookie.net/dragonball/images/9/91/Galactic_Patrol_Logo.png")
+                ]
+                session.add_all(fazioni)
+                session.commit()
+    except Exception as e:
+        print(f"Error seeding factions: {e}")
+        session.rollback()
+    finally:
+        session.close()
 
+
+class Fazione(Base):
+    __tablename__ = "fazione"
+    id = Column(Integer, primary_key=True)
+    nome = Column(String(32), unique=True)
+    descrizione = Column(String(128))
+    punteggio = Column(Integer, default=0)
+    link_immagine = Column(String(256))
 
 class Utente(Base):
     __tablename__ = "utente"
     id = Column(Integer, primary_key=True)
     id_telegram = Column('id_Telegram', Integer, unique=True)
+    id_fazione = Column(Integer, ForeignKey('fazione.id'), nullable=True)
     nome  = Column('nome', String(32))
     cognome = Column('cognome', String(32))
     username = Column('username', String(32), unique=True)

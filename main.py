@@ -150,6 +150,12 @@ class BotCommands:
             "/daily": self.handle_daily,
             "!daily": self.handle_daily,
             "🎁 premio giornaliero": self.handle_daily,
+            "/fazioni": self.handle_fazioni,
+            "!fazioni": self.handle_fazioni,
+            "/fazione": self.handle_fazione,
+            "!fazione": self.handle_fazione,
+            "/classifica_fazioni": self.handle_classifica_fazioni,
+            "!classifica_fazioni": self.handle_classifica_fazioni,
         }
         
         self.target_id = message.chat.id
@@ -1551,16 +1557,80 @@ class BotCommands:
         else:
             self.bot.send_message(self.target_id, msg, parse_mode='Markdown', reply_markup=markup)
 
-    def handle_stats(self):
-        """Alias for handle_status."""
-        self.handle_status()
+    def handle_fazioni(self):
+        from model import Fazione
+        session = Database().Session()
+        try:
+            utente = session.query(Utente).filter_by(id_telegram=self.chatid).first()
+            if not utente: return
+            
+            fazioni = session.query(Fazione).all()
+            if not fazioni:
+                self.bot.reply_to(self.message, "Nessuna fazione disponibile al momento.")
+                return
 
-    
-    
-    def handle_set_saga_active_admin(self):
-        # /set_saga_active "Saga di Freezer"
-        # Usage: Force set active saga logic for testing
-        pass
+            msg = "🚩 **SCEGLI LA TUA FAZIONE** 🚩\n\nAttenzione: La scelta della fazione è permanente per l'intera durata della stagione!\n\n"
+            
+            markup = types.InlineKeyboardMarkup()
+            for f in fazioni:
+                msg += f"🏅 **{f.nome}**\n_{f.descrizione}_\n\n"
+                # Solo se l'utente non ha una fazione
+                if not utente.id_fazione:
+                    markup.add(types.InlineKeyboardButton(f"Unisciti a {f.nome}", callback_data=f"join_fazione_{f.id}"))
+            
+            if utente.id_fazione:
+                fazione_attuale = session.query(Fazione).get(utente.id_fazione)
+                msg += f"✅ Sei già membro di: **{fazione_attuale.nome}**\nUsa /fazione per i dettagli."
+                self.bot.reply_to(self.message, msg, parse_mode='Markdown')
+            else:
+                self.bot.reply_to(self.message, msg, reply_markup=markup, parse_mode='Markdown')
+        finally:
+            session.close()
+
+    def handle_fazione(self):
+        from model import Fazione
+        session = Database().Session()
+        try:
+            utente = session.query(Utente).filter_by(id_telegram=self.chatid).first()
+            if not utente or not utente.id_fazione:
+                self.bot.reply_to(self.message, "Non fai parte di nessuna fazione. Usa /fazioni per unirti a una!")
+                return
+            
+            fazione = session.query(Fazione).get(utente.id_fazione)
+            
+            # Conta membri
+            membri = session.query(Utente).filter_by(id_fazione=fazione.id).count()
+            
+            msg = f"🚩 **{fazione.nome.upper()}** 🚩\n\n"
+            msg += f"_{fazione.descrizione}_\n\n"
+            msg += f"🏆 Punteggio Fazione: **{fazione.punteggio}**\n"
+            msg += f"👥 Membri Totali: **{membri}**\n\n"
+            msg += "Combatti nei Raid e nei Dungeon o fai salire di livello il tuo pg per accumulare punti per la tua fazione!"
+            
+            if fazione.link_immagine:
+                self.bot.send_photo(self.target_id, fazione.link_immagine, caption=msg, parse_mode='Markdown')
+            else:
+                self.bot.reply_to(self.message, msg, parse_mode='Markdown')
+        finally:
+            session.close()
+
+    def handle_classifica_fazioni(self):
+        from model import Fazione
+        session = Database().Session()
+        try:
+            fazioni = session.query(Fazione).order_by(Fazione.punteggio.desc()).all()
+            if not fazioni:
+                self.bot.reply_to(self.message, "Nessuna fazione disponibile.")
+                return
+                
+            msg = "🏆 **CLASSIFICA FAZIONI** 🏆\n\n"
+            for i, f in enumerate(fazioni):
+                medaglia = "🥇" if i == 0 else "🥈" if i == 1 else "🥉" if i == 2 else "🎖"
+                msg += f"{medaglia} **{f.nome}**: {f.punteggio} Punti\n"
+                
+            self.bot.reply_to(self.message, msg, parse_mode='Markdown')
+        finally:
+            session.close()
 
     def handle_set_saga_active(self, call, cat_id):
         user_id = call.from_user.id
@@ -2844,6 +2914,34 @@ def handle_inline_buttons(call):
         else:
             bot.edit_message_text(msg_l, call.message.chat.id, call.message.message_id)
         return
+    elif action.startswith("join_fazione_"):
+        fazione_id = int(action.replace("join_fazione_", ""))
+        session = Database().Session()
+        try:
+            from model import Fazione
+            db_utente = session.query(Utente).filter_by(id_telegram=user_id).first()
+            if not db_utente: return
+            
+            if db_utente.id_fazione is not None:
+                bot.answer_callback_query(call.id, "Appartieni già a una fazione!")
+                return
+                
+            fazione = session.query(Fazione).get(fazione_id)
+            if fazione:
+                db_utente.id_fazione = fazione.id
+                session.commit()
+                bot.answer_callback_query(call.id, f"Ti sei unito a: {fazione.nome}!")
+                
+                # Refresh UI
+                BotCommands(call.message, bot, user_id=user_id).handle_fazione()
+            else:
+                bot.answer_callback_query(call.id, "Fazione non trovata.")
+        except Exception as e:
+            print(f"Error joining fazione: {e}")
+            session.rollback()
+            bot.answer_callback_query(call.id, "Errore durante l'iscrizione.")
+        finally:
+            session.close()
 
     elif action.startswith("dg_"):
         parts = action.split("_")
