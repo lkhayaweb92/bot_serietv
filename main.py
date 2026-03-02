@@ -1400,9 +1400,8 @@ class BotCommands:
             
             msg += "\n_Torna domani per un'altra ricompensa!_"
             
-            # Send message and optionally update rank
+            # Send message
             self.bot.reply_to(self.message, msg, parse_mode='Markdown')
-            Points.Points().updateNomeSenzaMessaggio(self.message, bot) # For rank update if applies
             
         except Exception as e:
             session.rollback()
