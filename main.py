@@ -1321,6 +1321,9 @@ class BotCommands:
                 types.InlineKeyboardButton("🛡️ +1", callback_data="stat_add_resistenza"),
                 types.InlineKeyboardButton("🎯 +1", callback_data="stat_add_crit_rate")
             )
+            markup.row(
+                types.InlineKeyboardButton("⚖️ Bilanciato", callback_data="stat_add_bilanciato")
+            )
         
         markup.add(types.InlineKeyboardButton("🔄 Reset Statistiche (500 Fagioli)", callback_data="stat_reset"))
         
@@ -3728,6 +3731,42 @@ def handle_inline_buttons(call):
         available_points = total_points - used_points
         
         if available_points > 0:
+            if stat_name == "bilanciato":
+                # Auto-balance remaining points
+                stats_keys = ["vita", "aura", "danno", "velocita", "resistenza", "crit_rate"]
+                
+                # Fetch current values dict to manipulate them during distribution
+                current_stats = {k: getattr(utente, f"stat_{k}") for k in stats_keys}
+                
+                points_to_assign = available_points
+                while points_to_assign > 0:
+                    # Filter out crit_rate if it reached the cap (75)
+                    valid_keys = [k for k in stats_keys if not (k == "crit_rate" and current_stats["crit_rate"] >= 75)]
+                    
+                    if not valid_keys:
+                        # If somehow everything is capped (impossible with current limits but safe), break
+                        break
+                        
+                    # Find the minimum stat value among valid keys
+                    min_val = min(current_stats[k] for k in valid_keys)
+                    
+                    # Find all stats that have this minimum value
+                    min_keys = [k for k in valid_keys if current_stats[k] == min_val]
+                    
+                    # Pick one pseudo-randomly or deterministically (e.g., first in list) to increment
+                    chosen_key = min_keys[0]
+                    current_stats[chosen_key] += 1
+                    points_to_assign -= 1
+                
+                # Update DB with all the calculated final values
+                updates = {f"stat_{k}": current_stats[k] for k in stats_keys}
+                Database().update_user(user_id, updates)
+                
+                bot.answer_callback_query(call.id, f"✅ {available_points} Punti distribuiti in modo bilanciato!")
+                BotCommands(call.message, bot, user_id=user_id).handle_stats_menu(call=call)
+                return
+
+            # Normal single stat allocation
             # Check Crit Rate Cap
             if stat_name == "crit_rate" and getattr(utente, f"stat_{stat_name}") >= 75:
                 bot.answer_callback_query(call.id, "Hai raggiunto il limite massimo per Crit Rate (75%)!")
