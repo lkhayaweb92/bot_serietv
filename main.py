@@ -147,6 +147,8 @@ class BotCommands:
             "!crea_luna": self.handle_crea_luna,
             "/distruggi_luna": self.handle_distruggi_luna,
             "!distruggi_luna": self.handle_distruggi_luna,
+            "/daily": self.handle_daily,
+            "!daily": self.handle_daily,
         }
         
         self.target_id = message.chat.id
@@ -1344,6 +1346,70 @@ class BotCommands:
                 pass
         
         self.bot.send_message(self.target_id, msg, reply_markup=markup, parse_mode='Markdown')
+
+    def handle_daily(self):
+        utente = Utente().getUtente(self.chatid)
+        if not utente:
+            self.bot.reply_to(self.message, "Utente non trovato nel database.")
+            return
+
+        now = datetime.datetime.now()
+        oggi = now.date()
+
+        if utente.last_daily and utente.last_daily.date() == oggi:
+            self.bot.reply_to(self.message, "❌ **Hai già ritirato la ricompensa di oggi!** Torna domani.")
+            return
+
+        # Rewards Generation
+        points_reward = random.randint(200, 500)
+        exp_reward = random.randint(50, 150)
+        
+        # 10% Chance for a rare item
+        rare_item = None
+        if random.random() < 0.10:
+            rare_pool = ["Sfera del Drago", "Generatore di Onde Blutz", "Pozione Rigenerante Enorme", "Nitro", "Cariche Radar"]
+            rare_item = random.choice(rare_pool)
+
+        # Update Database
+        session = Database().Session()
+        try:
+            db_utente = session.query(Utente).filter_by(id_telegram=self.chatid).first()
+            if db_utente:
+                db_utente.points += points_reward
+                db_utente.exp += exp_reward
+                db_utente.last_daily = now
+                session.commit()
+                
+                # Check level up
+                can_grow, res_msg = db_utente.verifica_crescita()
+                if can_grow:
+                    self.bot.send_message(self.chatid, res_msg)
+
+            if rare_item:
+                Collezionabili().aggiungi_quantita(self.chatid, rare_item, 1)
+
+            # Build Message
+            msg = f"🎁 **RICOMPENSA GIORNALIERA RITIRATA!** 🎁\n\n"
+            msg += f"Hai appena ottenuto:\n"
+            msg += f"💰 **+{points_reward}** Fagioli Zen\n"
+            msg += f"✨ **+{exp_reward}** XP\n"
+            
+            if rare_item:
+                msg += f"\n🎉 **FORTUNA INCREDIBILE!** 🎉\n"
+                msg += f"Hai trovato un oggetto raro: **{rare_item}**!\n"
+            
+            msg += "\n_Torna domani per un'altra ricompensa!_"
+            
+            # Send message and optionally update rank
+            self.bot.reply_to(self.message, msg, parse_mode='Markdown')
+            Points.Points().updateNomeSenzaMessaggio(self.message, bot) # For rank update if applies
+            
+        except Exception as e:
+            session.rollback()
+            print(f"Error in handle_daily: {e}")
+            self.bot.reply_to(self.message, "Errore durante il riscatto della ricompensa.")
+        finally:
+            session.close()
 
     def handle_back(self):
         utente = Utente().getUtente(self.chatid)

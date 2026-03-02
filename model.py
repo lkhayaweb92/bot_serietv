@@ -352,6 +352,7 @@ class Utente(Base):
     scadenza_premium = Column('scadenza_premium',DateTime)
     abbonamento_attivo =  Column('abbonamento_attivo',Integer)
     last_radar_purchase = Column('last_radar_purchase', DateTime) # For 12h cooldown
+    last_daily = Column('last_daily', DateTime) # For /daily command
     
     # New Stats
     stat_vita = Column('stat_vita', Integer, default=0)
