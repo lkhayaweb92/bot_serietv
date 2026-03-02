@@ -116,7 +116,16 @@ class Database:
         if utente is not None:
             markup.add('👾 Scegli il personaggio', '🐢 Kame House')
             markup.add('🏆 Obiettivi Saga', '📖 Saga Pass')
-        markup.add('🏪 Mercato')
+            
+            # Check Daily
+            import datetime
+            oggi = datetime.datetime.now().date()
+            if not utente.last_daily or utente.last_daily.date() != oggi:
+                markup.add('🏪 Mercato', '🎁 Premio Giornaliero')
+            else:
+                markup.add('🏪 Mercato')
+        else:
+            markup.add('🏪 Mercato')
         
         # Controlled Dungeon Visibility
         show_dungeon = False

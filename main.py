@@ -149,6 +149,7 @@ class BotCommands:
             "!distruggi_luna": self.handle_distruggi_luna,
             "/daily": self.handle_daily,
             "!daily": self.handle_daily,
+            "🎁 premio giornaliero": self.handle_daily,
         }
         
         self.target_id = message.chat.id
@@ -1400,8 +1401,12 @@ class BotCommands:
             
             msg += "\n_Torna domani per un'altra ricompensa!_"
             
-            # Send message
+            # Send message and optionally update rank
             self.bot.reply_to(self.message, msg, parse_mode='Markdown')
+            
+            # Update Keyboard to remove the daily button
+            nuovo_utente = session.query(Utente).filter_by(id_telegram=self.chatid).first()
+            self.bot.send_message(self.target_id, "Menu Aggiornato", reply_markup=Database().startMarkup(nuovo_utente))
             
         except Exception as e:
             session.rollback()
