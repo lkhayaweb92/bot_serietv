@@ -116,6 +116,7 @@ class BotCommands:
             "set_image": self.handle_set_img,
             "set_saga_active": self.handle_set_saga_active_admin, # DEBUG ONLY
             "set_pg_img": self.handle_set_pg_img,
+            "end_faction_season": self.handle_end_faction_season,
         }
         self.comandi_generici = {
             "!dona": self.handle_dona,
@@ -1632,6 +1633,52 @@ class BotCommands:
         finally:
             session.close()
 
+    def handle_end_faction_season(self):
+        # Admin command to distribute rewards and reset points
+        session = Database().Session()
+        try:
+            from model import Fazione
+            fazioni = session.query(Fazione).order_by(Fazione.punteggio.desc()).all()
+            if not fazioni:
+                self.bot.reply_to(self.message, "Nessuna fazione attiva.")
+                return
+            
+            winning_faction = fazioni[0]
+            if winning_faction.punteggio == 0:
+                self.bot.reply_to(self.message, "Nessuna fazione ha segnato punti. Stagione resettata senza vincitori.")
+            else:
+                # Distribute rewards
+                members = session.query(Utente).filter_by(id_fazione=winning_faction.id).all()
+                reward_fagioli = 5000
+                reward_exp = 2000
+                
+                for member in members:
+                    member.points += reward_fagioli
+                    member.exp += reward_exp
+                
+                # Broadcast winner
+                msg = f"🎉 **LA STAGIONE DELLE FAZIONI È TERMINATA!** 🎉\n\n"
+                msg += f"La vittoria va a: **{winning_faction.nome}** (con {winning_faction.punteggio} punti)!\n\n"
+                msg += f"Tutti i membri della fazione vincitrice hanno ricevuto:\n"
+                msg += f"💰 +{reward_fagioli} Fagioli Zen\n✨ +{reward_exp} XP\n\n"
+                msg += "I punteggi sono stati ripristinati. Lottate per la gloria nella prossima stagione!"
+                
+                # Send to main group
+                self.bot.send_message(Tecnologia_GRUPPO, msg, parse_mode='Markdown')
+            
+            # Reset Points
+            for f in fazioni:
+                f.punteggio = 0
+            session.commit()
+            self.bot.reply_to(self.message, "Stagione fazione resettata con successo. Premi accreditati se applicabile.")
+            
+        except Exception as e:
+            print(f"Error ending faction season: {e}")
+            session.rollback()
+            self.bot.reply_to(self.message, "Si è verificato un errore durante la chiusura stagionale delle fazioni.")
+        finally:
+            session.close()
+
     def handle_set_saga_active(self, call, cat_id):
         user_id = call.from_user.id
         session = Database().Session()
@@ -3071,6 +3118,7 @@ def handle_inline_buttons(call):
                         # Rewards
                         all_pts = session.query(DungeonParticipant).filter_by(active_dungeon_id=active_dg.id).all()
                         reward_list = ""
+                        from model import Fazione # Import Fazione for points
                         for p in all_pts:
                             u = session.query(Utente).filter_by(id_telegram=p.user_id).first()
                             if u:
@@ -3081,7 +3129,17 @@ def handle_inline_buttons(call):
                                 u.points += total_points
                                 u.exp += total_exp
                                 
-                                reward_list += f"👤 {u.nome}: {p.dmg_done} dmg -> {total_exp} XP, {total_points} Fagioli Zen 🫘\n"
+                                reward_str = f"👤 {u.nome}: {p.dmg_done} dmg -> {total_exp} XP, {total_points} Fagioli Zen 🫘"
+                                
+                                # Faction points
+                                if u.id_fazione:
+                                    fazione = session.query(Fazione).get(u.id_fazione)
+                                    if fazione:
+                                        faction_points = 500 + int(contribution_bonus / 2)
+                                        fazione.punteggio += faction_points
+                                        reward_str += f", +{faction_points} Punti Fazione 🚩"
+                                
+                                reward_list += reward_str + "\n"
 
                         session.commit()
                         bot.send_message(call.message.chat.id, f"🏆 **DUNGEON COMPLETATO!** 🏆\n\nHai sbaragliato: {dungeon.nome}\n\n💰 **Ricompense**:\n{reward_list}")

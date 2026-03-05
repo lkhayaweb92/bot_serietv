@@ -777,6 +777,21 @@ class Utente(Base):
     def addExp(self,utente,exp):
         Database().update_user(utente.id_telegram,{'exp':utente.exp+exp})
         self.addSeasonExp(utente.id_telegram, exp)
+        
+        # Add passive Faction points (1 point per exp gain instance)
+        if hasattr(utente, 'id_fazione') and utente.id_fazione:
+            session = Database().Session()
+            try:
+                from model import Fazione
+                fazione = session.query(Fazione).get(utente.id_fazione)
+                if fazione:
+                    fazione.punteggio += 1
+                    session.commit()
+            except Exception as e:
+                print(f"Error adding faction points: {e}")
+                session.rollback()
+            finally:
+                session.close()
 
     def addSeasonExp(self, user_id, exp):
         session = Database().Session()
